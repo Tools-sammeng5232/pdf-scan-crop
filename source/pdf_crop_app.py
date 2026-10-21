@@ -193,6 +193,8 @@ STRINGS = {
         "pages_filter_empty": "页码范围里没有可用的页",
         "pages_filter_range": "页码超出范围（共 {n} 页）",
         "organize_fullscreen": "全屏",
+        "list_updated": "页面列表已更新：共 {n} 页，当前 {page}",
+        "organize_zoom_hint": "Ctrl + 滚轮（或 Ctrl + / -）缩放缩略图",
         "ins_select_title": "选择要插入的页",
         "ins_select_hint": "点缩略图勾选要插入的页；也可以在上面的页码框里直接输入（如 3,7,10-12）后点「应用」。",
         "select_spec_apply": "应用",
@@ -426,6 +428,8 @@ STRINGS = {
         "pages_filter_empty": "The page range matches no page",
         "pages_filter_range": "Page number out of range ({n} pages)",
         "organize_fullscreen": "Full screen",
+        "list_updated": "Page list updated: {n} page(s), now on {page}",
+        "organize_zoom_hint": "Ctrl + wheel (or Ctrl + / -) zooms the thumbnails",
         "ins_select_title": "Choose pages to insert",
         "ins_select_hint": "Tick the pages to insert, or type page numbers above (e.g. 3,7,10-12) and press Apply.",
         "select_spec_apply": "Apply",
@@ -1159,9 +1163,14 @@ class PageGrid(QListWidget):
     """Thumbnail grid with reliable drag reordering (multi-selection aware)."""
 
     moved = Signal()
+    ZOOM_MIN = 56
+    ZOOM_MAX = 260
+    ZOOM_STEP = 14
+    DEFAULT_THUMB = 132
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._thumb_side = self.DEFAULT_THUMB
         self.setViewMode(QListView.ViewMode.IconMode)
         self.setFlow(QListView.Flow.LeftToRight)
         self.setWrapping(True)
@@ -1178,9 +1187,47 @@ class PageGrid(QListWidget):
         self.setDefaultDropAction(Qt.DropAction.MoveAction)
         self.setDropIndicatorShown(True)
         self.setDragDropOverwriteMode(False)
+        self._apply_thumb_size()
 
     def selected_rows(self) -> list[int]:
         return sorted({self.row(item) for item in self.selectedItems()})
+
+    def _apply_thumb_size(self) -> None:
+        side = self._thumb_side
+        self.setIconSize(QSize(side, int(side * 4 / 3)))
+        cell = int(side * 1.18)
+        self.setGridSize(QSize(cell, int(cell * 4 / 3)))
+
+    def zoom_by(self, step: int) -> None:
+        side = max(self.ZOOM_MIN, min(self.ZOOM_MAX, self._thumb_side + step))
+        if side == self._thumb_side:
+            return
+        self._thumb_side = side
+        self._apply_thumb_size()
+
+    def wheelEvent(self, event) -> None:
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            delta = event.angleDelta().y()
+            if delta:
+                self.zoom_by(self.ZOOM_STEP if delta > 0 else -self.ZOOM_STEP)
+            event.accept()
+            return
+        super().wheelEvent(event)
+
+    def keyPressEvent(self, event) -> None:
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            key = event.key()
+            if key in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
+                self.zoom_by(self.ZOOM_STEP)
+                return
+            if key in (Qt.Key.Key_Minus, Qt.Key.Key_Underscore):
+                self.zoom_by(-self.ZOOM_STEP)
+                return
+            if key == Qt.Key.Key_0:
+                self._thumb_side = self.DEFAULT_THUMB
+                self._apply_thumb_size()
+                return
+        super().keyPressEvent(event)
 
     def move_rows(self, rows: list[int], target: int) -> None:
         """Move the given rows together so the block starts at target row."""
@@ -1292,8 +1339,7 @@ class PageOrganizeDialog(QDialog):
         hint.setWordWrap(True)
         layout.addWidget(hint)
         self.list = PageGrid()
-        self.list.setIconSize(QSize(132, 176))
-        self.list.setGridSize(QSize(156, 210))
+        self.list._apply_thumb_size()
         for key, note in entries:
             self.list.addItem(self._make_item(key, note))
         self.list.model().rowsInserted.connect(lambda *args: QTimer.singleShot(0, self._renumber))
@@ -1345,8 +1391,9 @@ class PageOrganizeDialog(QDialog):
         row3.addStretch(1)
         layout.addLayout(row3)
         self.deleted_label = QLabel(tr("organize_deleted_label"))
-        self.deleted_list = QListWidget()
-        self._make_grid(self.deleted_list, QSize(64, 86), QSize(88, 118))
+        self.deleted_list = PageGrid()
+        self.deleted_list._thumb_side = 64
+        self.deleted_list._apply_thumb_size()
         self.deleted_list.setDragEnabled(False)
         self.deleted_list.setAcceptDrops(False)
         self.deleted_list.setDragDropMode(QAbstractItemView.DragDropMode.NoDragDrop)
@@ -1601,8 +1648,7 @@ class PageSelectDialog(QDialog):
         self.list.setDragEnabled(False)
         self.list.setAcceptDrops(False)
         self.list.setDragDropMode(QAbstractItemView.DragDropMode.NoDragDrop)
-        self.list.setIconSize(QSize(132, 176))
-        self.list.setGridSize(QSize(156, 210))
+        self.list._apply_thumb_size()
         for position, key in enumerate(keys, start=1):
             item = QListWidgetItem(tr("page_label", page=position))
             item.setData(Qt.ItemDataRole.UserRole, position)
@@ -3754,6 +3800,8 @@ class PdfCropWindow(QMainWindow):
             message = self.t("import_done_partial", n=len(results), src=source, pages=pages_text)
         self.status.setText(message)
         self.append_log(message)
+        self.append_log(self.t("list_updated", n=len(self.page_list), page=self._page_label(request["keys"][0])))
+        self.table.viewport().update()
         for page, exc in failures:
             self.append_log(self.t("import_page_failed", page=page, exc=exc))
         if request["keys"]:
