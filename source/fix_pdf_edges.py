@@ -22,6 +22,10 @@ from PIL import Image
 
 
 A4_HEIGHT_PT = 841.89
+# The export maps a full page onto A4 height, so real-world margins convert through it.
+CM_PER_PAGE_HEIGHT = A4_HEIGHT_PT / 72.0 * 2.54
+# Inserted pages get keys at or above this base so they never collide with source pages.
+IMPORT_PAGE_BASE = 1_000_000
 DEFAULT_INPUT = "不定名-李天命.pdf"
 DEFAULT_OUTPUT = "不定名-李天命_内容修边.pdf"
 DEFAULT_WORK_DIR = "_fix_edges_work"
@@ -103,6 +107,9 @@ class CropJob:
     min_full_height_ratio: float = 0.90
     manual_crops: dict[int, tuple[int, int, int, int]] = field(default_factory=dict)
     page_rotates: dict[int, float] = field(default_factory=dict)
+    # Uniform margins in cm (left, top, right, bottom) cropped from every original page
+    # edge; when set, content analysis is skipped and pages are cropped by these only.
+    uniform_margins: tuple[float, float, float, float] | None = None
     pages: list[int] | None = None
     inspect_pages: list[int] = field(default_factory=list)
     inspect_dir: Path | None = None
@@ -227,13 +234,31 @@ def edits_path_for(src: Path) -> Path:
 
 def load_manual_edits(src: Path) -> tuple[dict[int, tuple[int, int, int, int]], dict[int, float]]:
     """Manual crop boxes and rotations the desktop app saved for this PDF."""
+    data = load_book_edits(src)
+    return data["crops"], data["rotates"]
+
+
+def load_book_edits(src: Path) -> dict:
+    """Everything saved for this PDF: crops, rotations, arranged order, deleted and inserted pages."""
+    empty = {"crops": {}, "rotates": {}, "order": [], "deleted": [], "imports": {}}
     try:
         data = json.loads(edits_path_for(src).read_text(encoding="utf-8"))
         crops = {int(page): tuple(int(v) for v in box) for page, box in data.get("crops", {}).items()}
         rotates = {int(page): float(angle) for page, angle in data.get("rotates", {}).items()}
+        order = [int(page) for page in data.get("order", []) if int(page) > 0]
+        deleted = [int(page) for page in data.get("deleted", []) if int(page) > 0]
+        imports = {int(key): dict(entry) for key, entry in data.get("imports", {}).items()}
     except (OSError, ValueError, TypeError, AttributeError):
-        return {}, {}
-    return {page: box for page, box in crops.items() if len(box) == 4}, rotates
+        return empty
+    crops = {page: box for page, box in crops.items() if len(box) == 4}
+    imports = {key: entry for key, entry in imports.items() if key >= IMPORT_PAGE_BASE}
+    return {
+        "crops": crops,
+        "rotates": rotates,
+        "order": order,
+        "deleted": deleted,
+        "imports": imports,
+    }
 
 
 def save_manual_edits(
@@ -241,20 +266,43 @@ def save_manual_edits(
     crops: dict[int, tuple[int, int, int, int]],
     rotates: dict[int, float],
 ) -> None:
+    save_book_edits(src, crops, rotates)
+
+
+def save_book_edits(
+    src: Path,
+    crops: dict[int, tuple[int, int, int, int]],
+    rotates: dict[int, float],
+    order: list[int] | None = None,
+    deleted: list[int] | None = None,
+    imports: dict[int, dict] | None = None,
+) -> None:
+    """Persist manual crops, rotations, the arranged page order and inserted pages."""
     path = edits_path_for(src)
-    if not crops and not rotates:
+    if not crops and not rotates and not order and not deleted and not imports:
         path.unlink(missing_ok=True)
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    data = {
+    data: dict[str, object] = {
         "version": EDITS_VERSION,
         "source": str(src.resolve()),
         "crops": {str(page): list(box) for page, box in sorted(crops.items())},
         "rotates": {str(page): angle for page, angle in sorted(rotates.items())},
     }
+    if order is not None:
+        data["order"] = list(order)
+    if deleted is not None:
+        data["deleted"] = sorted(deleted)
+    if imports is not None:
+        data["imports"] = {str(key): dict(entry) for key, entry in sorted(imports.items())}
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
     tmp.replace(path)
+
+
+def imports_dir_for(src: Path) -> Path:
+    """Inserted-page images live beside the cache, so rebuilding a cache never deletes them."""
+    return app_data_dir("imports", source_key(src))
 
 
 def run(cmd: list[str], cwd: Path) -> str:
@@ -587,6 +635,61 @@ def extract_images(
     if expected_pages is not None:
         write_cache_metadata(work, src, expected_pages, render_dpi)
     return images
+
+
+def extract_single_page(src: Path, page_num: int, dest: Path, render_dpi: int = DEFAULT_RENDER_DPI) -> Path:
+    """One page of another PDF as a JPEG, for pages inserted by the page organizer."""
+    if not HAS_FITZ:
+        raise RuntimeError("未安装 PyMuPDF，无法抽出插入页")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with fitz.open(src) as doc:
+        if page_num < 1 or page_num > doc.page_count:
+            raise ValueError(f"页码 {page_num} 超出范围")
+        page = doc[page_num - 1]
+        if not _export_embedded_image(doc, page, dest):
+            _render_page_jpeg(page, dest, render_dpi)
+    return dest
+
+
+def enhance_scan_image(image: Image.Image, spread: int = 50, dark_guard: int = 60) -> Image.Image:
+    """Scanner-style auto enhancement: stretch levels so the paper goes white and ink deepens.
+
+    The same luminance-derived level map is applied to every channel, so paper is whitened
+    without shifting colors. Near-uniform pages fall back to a fixed spread below the paper
+    level; very dark images are left alone.
+    """
+    rgb = image if image.mode == "RGB" else image.convert("RGB")
+    gray = rgb.convert("L")
+    hist = gray.histogram()
+    total = sum(hist) or 1
+    low_cut = max(1, int(total * 0.005))
+    high_cut = max(1, int(total * 0.005))
+    lo = 0
+    acc = 0
+    for value, count in enumerate(hist):
+        acc += count
+        if acc >= low_cut:
+            lo = value
+            break
+    hi = 255
+    acc = 0
+    for value in range(255, -1, -1):
+        acc += hist[value]
+        if acc >= high_cut:
+            hi = value
+            break
+    if hi - lo < spread:
+        if hi < dark_guard:
+            return rgb
+        lo = max(0, hi - spread)
+    if hi <= lo or (lo <= 3 and hi >= 252):
+        return rgb
+    scale = 255.0 / (hi - lo)
+
+    def level(value: int) -> int:
+        return max(0, min(255, int(round((value - lo) * scale))))
+
+    return rgb.point(level)
 
 
 def load_rgb_array(path: Path) -> np.ndarray:
@@ -2048,6 +2151,52 @@ def analyze_pages(
     return [plan for plan in ordered if plan is not None]
 
 
+def build_uniform_plans(
+    images: list[Path],
+    margins_cm: tuple[float, float, float, float],
+    manual_crops: dict[int, tuple[int, int, int, int]] | None = None,
+    page_rotates: dict[int, float] | None = None,
+    progress: ProgressCallback | None = None,
+    cancel: CancelFlag | None = None,
+) -> list[PagePlan]:
+    """Fast path: crop a fixed margin off every page instead of running content analysis."""
+    manual_crops = manual_crops or {}
+    page_rotates = page_rotates or {}
+    plans: list[PagePlan] = []
+    for index, image in enumerate(images, start=1):
+        check_cancelled(cancel)
+        page_num = page_number_from_image(image)
+        work_image = image
+        angle = float(page_rotates.get(page_num, 0.0) or 0.0)
+        if abs(angle) > 1e-6:
+            work_image = rotate_image_file(image, image.with_name(f"{image.stem}_rot.jpg"), angle)
+        with Image.open(work_image) as im:
+            width, height = im.size
+            mode = im.mode
+        box = apply_uniform_to_box((0, 0, width, height), width, height, margins_cm)
+        note = "manual-override+uniform"
+        manual = manual_crops.get(page_num)
+        if manual is not None:
+            box = apply_uniform_to_box(clamp_crop(manual, width, height), width, height, margins_cm)
+            note += "+manual"
+        plans.append(
+            PagePlan(
+                page=page_num,
+                path=work_image,
+                source_path=image,
+                width=width,
+                height=height,
+                mode=mode,
+                crop=box,
+                safe=box,
+                note=note,
+                rotate_deg=angle,
+            )
+        )
+        emit(progress, f"裁边第 {page_num} 页", index, len(images))
+    return plans
+
+
 def pdf_num(value: float) -> str:
     if math.isclose(value, round(value), abs_tol=1e-5):
         return str(int(round(value)))
@@ -2986,6 +3135,32 @@ def clamp_crop(crop: tuple[int, int, int, int], width: int, height: int) -> tupl
     return left, top, right, bottom
 
 
+def uniform_margins_px(height: int, margins_cm: tuple[float, float, float, float]) -> tuple[int, int, int, int]:
+    """Uniform margins in image pixels; the export maps a full page onto A4 height (29.7 cm)."""
+    scale = height / CM_PER_PAGE_HEIGHT
+    left, top, right, bottom = margins_cm
+    return (
+        max(0, round(left * scale)),
+        max(0, round(top * scale)),
+        max(0, round(right * scale)),
+        max(0, round(bottom * scale)),
+    )
+
+
+def apply_uniform_to_box(
+    box: tuple[int, int, int, int],
+    width: int,
+    height: int,
+    margins_cm: tuple[float, float, float, float],
+) -> tuple[int, int, int, int]:
+    """Crop at least these centimetres from each original page edge, never less than `box`."""
+    left, top, right, bottom = uniform_margins_px(height, margins_cm)
+    l, t, r, b = box
+    return clamp_crop(
+        (max(l, left), max(t, top), min(r, width - right), min(b, height - bottom)), width, height
+    )
+
+
 def parse_page_crop_spec(specs: list[str]) -> dict[int, tuple[int, int, int, int]]:
     crops: dict[int, tuple[int, int, int, int]] = {}
     for spec in specs:
@@ -3024,6 +3199,25 @@ def parse_page_rotate_spec(specs: list[str]) -> dict[int, float]:
                 raise ValueError("Rotate page numbers must be positive")
             rotates[page] = float(angle_s.strip())
     return rotates
+
+
+def parse_uniform_margins(spec: str) -> tuple[float, float, float, float] | None:
+    """'2' or '0,0,0,2' in cm; a single value applies to all four sides."""
+    spec = spec.strip()
+    if not spec:
+        return None
+    parts = [part for part in re.split(r"[,;\s]+", spec) if part]
+    if len(parts) == 1:
+        parts = [parts[0]] * 4
+    if len(parts) != 4:
+        raise ValueError("--uniform-crop needs four values (left,top,right,bottom) in cm, or one for all sides")
+    values = []
+    for part in parts:
+        value = float(part)
+        if not 0 <= value <= 30:
+            raise ValueError("--uniform-crop values must be between 0 and 30 cm")
+        values.append(value)
+    return (values[0], values[1], values[2], values[3])
 
 
 def render_inspection_pages_fitz(
@@ -3112,21 +3306,32 @@ def execute_job(
         backend=job.backend,
     )
     check_cancelled(cancel)
-    emit(progress, "开始分析裁切框", 0, len(images))
-    plans = analyze_pages(
-        images,
-        job.min_width_ratio,
-        job.min_height_ratio,
-        job.manual_crops,
-        job.min_full_width_ratio,
-        job.min_full_height_ratio,
-        job.page_rotates,
-        progress,
-        cancel,
-        job.jobs,
-        job.crop_mode,
-        job.auto_rotate,
-    )
+    if job.uniform_margins:
+        emit(progress, "统一裁边每页", 0, len(images))
+        plans = build_uniform_plans(
+            images,
+            job.uniform_margins,
+            job.manual_crops,
+            job.page_rotates,
+            progress,
+            cancel,
+        )
+    else:
+        emit(progress, "开始分析裁切框", 0, len(images))
+        plans = analyze_pages(
+            images,
+            job.min_width_ratio,
+            job.min_height_ratio,
+            job.manual_crops,
+            job.min_full_width_ratio,
+            job.min_full_height_ratio,
+            job.page_rotates,
+            progress,
+            cancel,
+            job.jobs,
+            job.crop_mode,
+            job.auto_rotate,
+        )
     if job.report is not None:
         write_report(plans, job.report)
     if job.write_pdf:
@@ -3202,6 +3407,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         metavar="PAGE:DEG",
         help="rotate a page before cropping, Pillow degrees (positive = counterclockwise), e.g. --page-rotate 1:1.0",
+    )
+    parser.add_argument(
+        "--uniform-crop",
+        default="",
+        metavar="L,T,R,B",
+        help=(
+            "skip content analysis and crop the same margin off every page, in cm measured "
+            "from the original page edges, e.g. 0,0,0,2 or just 2"
+        ),
     )
     parser.add_argument(
         "--pages",
@@ -3303,6 +3517,7 @@ def main(argv: list[str] | None = None) -> int:
         page_rotates = parse_page_rotate_spec(args.page_rotate)
         inspect_pages = parse_page_spec(args.inspect_pages)
         selected_pages = parse_page_spec(args.pages) or None
+        uniform_margins = parse_uniform_margins(args.uniform_crop)
     except ValueError as exc:
         parser.error(str(exc))
 
@@ -3344,6 +3559,7 @@ def main(argv: list[str] | None = None) -> int:
         min_full_height_ratio=min_full_height_ratio,
         manual_crops=manual_crops,
         page_rotates=page_rotates,
+        uniform_margins=uniform_margins,
         pages=selected_pages,
         inspect_pages=inspect_pages,
         inspect_dir=resolve_path(args.inspect_dir, cwd) if inspect_pages else None,
