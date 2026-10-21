@@ -156,6 +156,9 @@ STRINGS = {
         "org_duplicate": "复制所选页",
         "org_reset": "恢复原顺序",
         "ins_pdf_title": "插入 PDF 页",
+        "import_done_partial": "已插入 {n} 页（来源：{src}），页码 {pages} 无效已跳过",
+        "import_page_failed": "插入失败：源 PDF 第 {page} 页 · {exc}",
+        "ins_pdf_range": "「{name}」只有 {total} 页，页码 {pages} 无效",
         "ins_pages_label": "要插入的页码（如 3,7,10-12）",
         "ins_pages_ph": "页码，如 3,7,10-12",
         "ins_at_start": "插到开头",
@@ -381,6 +384,9 @@ STRINGS = {
         "org_duplicate": "Duplicate selection",
         "org_reset": "Reset order",
         "ins_pdf_title": "Insert PDF pages",
+        "import_done_partial": "Inserted {n} page(s) from {src}; page(s) {pages} were invalid and skipped",
+        "import_page_failed": "Insert failed: source page {page} · {exc}",
+        "ins_pdf_range": "{name} only has {total} pages; page(s) {pages} are invalid",
         "ins_pages_label": "Pages to insert (e.g. 3,7,10-12)",
         "ins_pages_ph": "pages, e.g. 3,7,10-12",
         "ins_at_start": "at the start",
@@ -1455,6 +1461,24 @@ class PageOrganizeDialog(QDialog):
             QMessageBox.warning(self, self._tr("organize_title"), str(exc))
             return
         if not pages:
+            return
+        total = 0
+        try:
+            total = crop.page_count(Path(path), Path(path).parent)
+        except Exception:
+            total = 0
+        bad = [page for page in pages if total and page > total]
+        if bad:
+            QMessageBox.warning(
+                self,
+                self._tr("organize_title"),
+                self._tr(
+                    "ins_pdf_range",
+                    name=Path(path).name,
+                    total=total,
+                    pages=",".join(str(page) for page in bad),
+                ),
+            )
             return
         self._requests.append({"type": "pdf", "path": path, "pages": pages, "index": self._insert_index()})
 
@@ -3279,7 +3303,18 @@ class PdfCropWindow(QMainWindow):
             thumbs[key] = pix
         return thumbs
 
+    def _reshow(self, key: int | None, fallback: int | None = None) -> None:
+        """Re-show the page the user was looking at after the order changed."""
+        if not self.page_list:
+            return
+        pos = self._pos_of(key) if key is not None else 0
+        if pos:
+            self.goto_page(pos)
+        else:
+            self.goto_page(max(1, min(fallback or self.current_page, len(self.page_list))))
+
     def _apply_order(self, order: list[int], deleted: list[int]) -> None:
+        shown = self._current_key()
         # The incoming order may bring deleted pages back (restore) and drop
         # others (delete), so validate against every page that can exist -
         # including restorable source pages - not just the visible ones.
@@ -3296,8 +3331,7 @@ class PdfCropWindow(QMainWindow):
         self._refresh_table()
         self._save_edits()
         self.status.setText(self.t("pages_reordered", n=len(self.page_list)))
-        if self.page_list:
-            self.goto_page(min(self.current_page, len(self.page_list)))
+        self._reshow(shown)
 
     def _on_table_reorder(self, rows: list[int], target: int) -> None:
         """Rows dragged in the results table land as one block before target."""
@@ -3328,6 +3362,7 @@ class PdfCropWindow(QMainWindow):
         for offset in range(len(block)):
             self.table.selectionModel().select(self.table.model().index(insert_at + offset, 0), flags)
         self._save_edits()
+        self.goto_page(insert_at + 1)
         self.status.setText(self.t("pages_reordered", n=len(keys)))
 
     def _on_table_context(self, pos) -> None:
@@ -3360,16 +3395,19 @@ class PdfCropWindow(QMainWindow):
         target = row + delta
         if not 0 <= row < len(keys) or not 0 <= target < len(keys):
             return
+        moved = keys[row]
         keys[row], keys[target] = keys[target], keys[row]
         self._page_order = keys
         self.page_list = self._ordered_keys()
         self._refresh_table()
         self.table.selectRow(target)
         self._save_edits()
+        self._reshow(moved)
 
     def _delete_pages(self, keys: list[int]) -> None:
         if not keys or self.src is None or self.busy or self._rotate_busy:
             return
+        shown = self._current_key()
         order = self._materialize_order()
         for key in keys:
             if key >= crop.IMPORT_PAGE_BASE:
@@ -3388,10 +3426,10 @@ class PdfCropWindow(QMainWindow):
             self.status.setText(self.t("page_deleted", label=self._page_label(keys[0]), n=len(self.page_list)))
         else:
             self.status.setText(self.t("pages_deleted", n=len(keys), m=len(self.page_list)))
-        if self.page_list:
-            self.goto_page(min(self.current_page, len(self.page_list)))
+        self._reshow(shown)
 
     def _restore_pages(self, keys: list[int]) -> None:
+        shown = self._current_key()
         order = self._materialize_order()
         for key in keys:
             self._deleted.discard(key)
@@ -3403,6 +3441,7 @@ class PdfCropWindow(QMainWindow):
         self._refresh_table()
         self._save_edits()
         self.status.setText(self.t("pages_restored", n=len(keys)))
+        self._reshow(shown)
 
     def delete_current_page(self) -> None:
         if self.src is None or self.busy or self._rotate_busy:
@@ -3438,6 +3477,24 @@ class PdfCropWindow(QMainWindow):
             QMessageBox.warning(self, self.t("app_title"), str(exc))
             return
         if not pages:
+            return
+        total = 0
+        try:
+            total = crop.page_count(Path(path), Path(path).parent)
+        except Exception:
+            total = 0
+        bad = [page for page in pages if total and page > total]
+        if bad:
+            QMessageBox.warning(
+                self,
+                self.t("app_title"),
+                self.t(
+                    "ins_pdf_range",
+                    name=Path(path).name,
+                    total=total,
+                    pages=",".join(str(page) for page in bad),
+                ),
+            )
             return
         self._start_insert_request({"type": "pdf", "path": path, "pages": pages, "index": index})
 
@@ -3495,18 +3552,27 @@ class PdfCropWindow(QMainWindow):
                 results: list[tuple[crop.PagePlan, dict]] = []
                 total = len(request["keys"])
                 if request["type"] == "pdf":
+                    failures: list[tuple[int, str]] = []
                     for key, page_num in zip(request["keys"], request["pages"]):
                         base = imports_root / f"import-{key}.jpg"
-                        crop.extract_single_page(Path(request["path"]), int(page_num), base, render_dpi)
-                        plan = crop.analyze_one_page(
-                            base, key,
-                            kwargs["min_width_ratio"], kwargs["min_height_ratio"],
-                            kwargs["min_full_width_ratio"], kwargs["min_full_height_ratio"],
-                            None, 0.0, kwargs["crop_mode"], True,
-                        )
-                        plan.note = f"import+{plan.note}"
-                        results.append((plan, {"pdf": request["path"], "page": int(page_num)}))
-                        self.events.put(("progress", self.t("ins_progress", i=len(results), n=total), len(results), total))
+                        try:
+                            crop.extract_single_page(Path(request["path"]), int(page_num), base, render_dpi)
+                            plan = crop.analyze_one_page(
+                                base, key,
+                                kwargs["min_width_ratio"], kwargs["min_height_ratio"],
+                                kwargs["min_full_width_ratio"], kwargs["min_full_height_ratio"],
+                                None, 0.0, kwargs["crop_mode"], True,
+                            )
+                            plan.note = f"import+{plan.note}"
+                            results.append((plan, {"pdf": request["path"], "page": int(page_num)}))
+                            self.events.put(("progress", self.t("ins_progress", i=len(results), n=total), len(results), total))
+                        except Exception as exc:
+                            # One bad page number must not discard the pages that worked.
+                            failures.append((int(page_num), str(exc)))
+                    if failures:
+                        request["failures"] = failures
+                        if not results:
+                            raise RuntimeError(failures[0][1])
                 elif request["type"] == "image":
                     for key, file in zip(request["keys"], request["files"]):
                         base = imports_root / f"import-{key}.jpg"
@@ -3591,8 +3657,14 @@ class PdfCropWindow(QMainWindow):
         else:
             source = self.t("import_src_dup")
         message = self.t("import_done", n=len(results), src=source)
+        failures = request.get("failures") or []
+        if failures:
+            pages_text = ", ".join(str(page) for page, _exc in failures)
+            message = self.t("import_done_partial", n=len(results), src=source, pages=pages_text)
         self.status.setText(message)
         self.append_log(message)
+        for page, exc in failures:
+            self.append_log(self.t("import_page_failed", page=page, exc=exc))
         if request["keys"]:
             pos = self._pos_of(request["keys"][0])
             if pos:
