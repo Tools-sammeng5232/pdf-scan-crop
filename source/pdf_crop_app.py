@@ -193,6 +193,9 @@ STRINGS = {
         "pages_filter_empty": "页码范围里没有可用的页",
         "pages_filter_range": "页码超出范围（共 {n} 页）",
         "organize_fullscreen": "全屏",
+        "ins_select_title": "选择要插入的页",
+        "ins_select_hint": "点缩略图勾选要插入的页；也可以在上面的页码框里直接输入（如 3,7,10-12）后点「应用」。",
+        "select_spec_apply": "应用",
         "pages_reordered_log": "已调整页面顺序，共 {n} 页",
         "insert_removed": "已移除 {n} 个插入页（记录与图片已清除）",
         "select_pages_btn": "按缩略图选页…",
@@ -423,6 +426,9 @@ STRINGS = {
         "pages_filter_empty": "The page range matches no page",
         "pages_filter_range": "Page number out of range ({n} pages)",
         "organize_fullscreen": "Full screen",
+        "ins_select_title": "Choose pages to insert",
+        "ins_select_hint": "Tick the pages to insert, or type page numbers above (e.g. 3,7,10-12) and press Apply.",
+        "select_spec_apply": "Apply",
         "pages_reordered_log": "Page order updated, {n} page(s)",
         "insert_removed": "Removed {n} inserted page(s) (records and images cleared)",
         "select_pages_btn": "Pick pages...",
@@ -608,6 +614,18 @@ def render_pdf_page(src: Path, page: int, dpi: int = 96) -> Image.Image:
             raise ValueError(f"页码 {page} 超出范围")
         pix = doc[page - 1].get_pixmap(dpi=dpi, alpha=False)
         return Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+
+
+def pdf_page_thumbs(path: Path, dpi: int = 16) -> dict[int, QPixmap]:
+    """Small previews of every page in an arbitrary PDF (for the insert picker)."""
+    thumbs: dict[int, QPixmap] = {}
+    with crop.fitz.open(path) as doc:
+        for number in range(1, doc.page_count + 1):
+            pix = doc[number - 1].get_pixmap(dpi=dpi)
+            image = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+            image.thumbnail((120, 168))
+            thumbs[number] = pil_to_pixmap(image)
+    return thumbs
 
 
 def pil_to_pixmap(image: Image.Image) -> QPixmap:
@@ -1487,33 +1505,30 @@ class PageOrganizeDialog(QDialog):
         path, _ = QFileDialog.getOpenFileName(self, self._tr("ins_pdf_title"), "", self._tr("pdf_filter"))
         if not path:
             return
-        text, ok = QInputDialog.getText(self, self._tr("ins_pdf_title"), self._tr("ins_pages_label"))
-        if not ok or not text.strip():
-            return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            pages = crop.parse_page_spec(text)
-        except ValueError as exc:
+            thumbs = pdf_page_thumbs(Path(path))
+        except Exception as exc:
+            QApplication.restoreOverrideCursor()
             QMessageBox.warning(self, self._tr("organize_title"), str(exc))
             return
-        if not pages:
+        QApplication.restoreOverrideCursor()
+        if not thumbs:
             return
-        total = 0
-        try:
-            total = crop.page_count(Path(path), Path(path).parent)
-        except Exception:
-            total = 0
-        bad = [page for page in pages if total and page > total]
-        if bad:
-            QMessageBox.warning(
-                self,
-                self._tr("organize_title"),
-                self._tr(
-                    "ins_pdf_range",
-                    name=Path(path).name,
-                    total=total,
-                    pages=",".join(str(page) for page in bad),
-                ),
-            )
+        picker = PageSelectDialog(
+            self,
+            sorted(thumbs),
+            set(),
+            self._tr,
+            thumbs,
+            title=self._tr("ins_select_title"),
+            hint=self._tr("ins_select_hint"),
+            spec_field=True,
+        )
+        if picker.exec() != QDialog.DialogCode.Accepted:
+            return
+        pages = picker.selected_positions()
+        if not pages:
             return
         self._requests.append({"type": "pdf", "path": path, "pages": pages, "index": self._insert_index()})
 
@@ -1558,16 +1573,30 @@ class PageSelectDialog(QDialog):
         selected: set[int],
         tr,
         thumbs: dict[int, QPixmap] | None = None,
+        title: str | None = None,
+        hint: str | None = None,
+        spec_field: bool = False,
     ) -> None:
         super().__init__(parent)
         self._tr = tr
         self._thumbs = thumbs or {}
-        self.setWindowTitle(tr("select_pages_title"))
+        self.setWindowTitle(title or tr("select_pages_title"))
         self.resize(1000, 720)
         layout = QVBoxLayout(self)
-        hint = QLabel(tr("select_pages_hint"))
+        hint = QLabel(hint or tr("select_pages_hint"))
         hint.setWordWrap(True)
         layout.addWidget(hint)
+        self.spec_edit = None
+        if spec_field:
+            spec_row = QHBoxLayout()
+            spec_row.addWidget(QLabel(tr("ins_pages_label")))
+            self.spec_edit = QLineEdit()
+            spec_row.addWidget(self.spec_edit, 1)
+            apply_btn = QPushButton(tr("select_spec_apply"))
+            apply_btn.clicked.connect(self._apply_spec)
+            spec_row.addWidget(apply_btn)
+            self.spec_edit.returnPressed.connect(self._apply_spec)
+            layout.addLayout(spec_row)
         self.list = PageGrid()
         self.list.setDragEnabled(False)
         self.list.setAcceptDrops(False)
@@ -1610,6 +1639,24 @@ class PageSelectDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
         self.list.itemChanged.connect(self._update_count)
+        self._update_count()
+
+    def _apply_spec(self) -> None:
+        if self.spec_edit is None:
+            return
+        text = self.spec_edit.text().strip()
+        try:
+            pages = crop.parse_page_spec(text)
+        except ValueError as exc:
+            QMessageBox.warning(self, self._tr("select_pages_title"), str(exc))
+            return
+        wanted = set(pages)
+        for row in range(self.list.count()):
+            item = self.list.item(row)
+            position = int(item.data(Qt.ItemDataRole.UserRole))
+            item.setCheckState(
+                Qt.CheckState.Checked if position in wanted else Qt.CheckState.Unchecked
+            )
         self._update_count()
 
     def _set_all(self, state) -> None:
@@ -2571,6 +2618,8 @@ class PdfCropWindow(QMainWindow):
             self.show_plan(key)
         elif self.src is not None:
             self.show_pdf_preview(key if key is not None else page)
+        if not getattr(self, "_table_driven", False):
+            self._sync_table_selection()
 
     def step_page(self, delta: int) -> None:
         """Move through the arranged output, one page at a time."""
@@ -2716,7 +2765,11 @@ class PdfCropWindow(QMainWindow):
         rows = self.table.selectionModel().selectedRows()
         if not rows:
             return
-        self.goto_page(rows[0].row() + 1)
+        self._table_driven = True
+        try:
+            self.goto_page(rows[0].row() + 1)
+        finally:
+            self._table_driven = False
 
     def show_plan(self, page: int) -> None:
         plan = self.plans[page]
@@ -3398,15 +3451,6 @@ class PdfCropWindow(QMainWindow):
         self._page_order = keys
         self.page_list = list(keys)
         self._refresh_table()
-        # setCurrentCell clears the selection, so move the cursor first and
-        # then select the whole dragged block.
-        self.table.setCurrentCell(insert_at, 0)
-        self.table.clearSelection()
-        flags = (
-            QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows
-        )
-        for offset in range(len(block)):
-            self.table.selectionModel().select(self.table.model().index(insert_at + offset, 0), flags)
         self._save_edits()
         self.append_log(self.t("pages_reordered_log", n=len(self.page_list)))
         self.goto_page(insert_at + 1)
@@ -3518,33 +3562,30 @@ class PdfCropWindow(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(self, self.t("ins_pdf_title"), self._last_dir, self.t("pdf_filter"))
         if not path:
             return
-        text, ok = QInputDialog.getText(self, self.t("ins_pdf_title"), self.t("ins_pages_label"))
-        if not ok or not text.strip():
-            return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            pages = crop.parse_page_spec(text)
-        except ValueError as exc:
+            thumbs = pdf_page_thumbs(Path(path))
+        except Exception as exc:
+            QApplication.restoreOverrideCursor()
             QMessageBox.warning(self, self.t("app_title"), str(exc))
             return
-        if not pages:
+        QApplication.restoreOverrideCursor()
+        if not thumbs:
             return
-        total = 0
-        try:
-            total = crop.page_count(Path(path), Path(path).parent)
-        except Exception:
-            total = 0
-        bad = [page for page in pages if total and page > total]
-        if bad:
-            QMessageBox.warning(
-                self,
-                self.t("app_title"),
-                self.t(
-                    "ins_pdf_range",
-                    name=Path(path).name,
-                    total=total,
-                    pages=",".join(str(page) for page in bad),
-                ),
-            )
+        picker = PageSelectDialog(
+            self,
+            sorted(thumbs),
+            set(),
+            self.t,
+            thumbs,
+            title=self.t("ins_select_title"),
+            hint=self.t("ins_select_hint"),
+            spec_field=True,
+        )
+        if picker.exec() != QDialog.DialogCode.Accepted:
+            return
+        pages = picker.selected_positions()
+        if not pages:
             return
         self._start_insert_request({"type": "pdf", "path": path, "pages": pages, "index": index})
 
@@ -3875,6 +3916,20 @@ class PdfCropWindow(QMainWindow):
                 self.set_input(path)
                 break
 
+    def _sync_table_selection(self) -> None:
+        """Keep the results table on the page the crop view is showing."""
+        if not hasattr(self, "table") or not self.page_list or self.table.rowCount() == 0:
+            return
+        row = self.current_page - 1
+        if not 0 <= row < self.table.rowCount():
+            return
+        self.table.blockSignals(True)
+        self.table.selectRow(row)
+        self.table.blockSignals(False)
+        item = self.table.item(row, 0)
+        if item is not None:
+            self.table.scrollToItem(item, QAbstractItemView.ScrollHint.EnsureVisible)
+
     def _refresh_table(self) -> None:
         pages = self.page_list or sorted(self.plans)
         self.table.blockSignals(True)
@@ -3891,6 +3946,7 @@ class PdfCropWindow(QMainWindow):
             self.table.setItem(row, 1, QTableWidgetItem(plan.note))
             self.table.setItem(row, 2, QTableWidgetItem(box))
         self.table.blockSignals(False)
+        self._sync_table_selection()
 
     def _update_table_row(self, page: int) -> None:
         plan = self.plans.get(page)
