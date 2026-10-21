@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
     QLineEdit,
+    QListView,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
@@ -82,7 +83,7 @@ STRINGS = {
         "min_full": "相对原图最少保留",
         "min_page": "稀疏页最少保留",
         "pages_section": "页码（可空）",
-        "pages_only": "只处理这些页（分析和生成）",
+        "pages_only": "只处理这些页（按整理后的页码）",
         "pages_ph": "只处理部分页，例如 1,14,20-23",
         "inspect_pages": "检查图页码",
         "inspect_ph": "生成后再渲染这些页的检查图",
@@ -130,7 +131,7 @@ STRINGS = {
         "rotate_all_done_no_plans": "全书已{dir}。点「分析预览」检查，或直接点「生成 PDF」。",
         "organize_btn": "页面整理（排序 / 删页 / 插页）…",
         "organize_title": "页面整理",
-        "organize_hint": "不必先「分析预览」即可整理。拖动条目或用按钮排序（条目带页面缩略图）；「删除所选」把源页面移出输出（可用「恢复所选」放回末尾），删除插入页则是整个移除。未分析的页面在生成时会自动补算。顺序只影响生成的 PDF，不会改动源文件。",
+        "organize_hint": "不必先「分析预览」即可整理，页码就是整理后的页码（插入页与原有页完全等价）。缩略图一行多页，可拖动排序或点「全屏」放大；「删除所选」把源页面移出输出（可用「恢复所选」放回末尾），删除插入页则是整个移除。未分析的页面在生成时会自动补算，顺序只影响生成的 PDF，不会改动源文件。",
         "organize_deleted_label": "已删除的页（可恢复）：",
         "org_move_up": "上移 ↑",
         "org_move_down": "下移 ↓",
@@ -161,6 +162,8 @@ STRINGS = {
         "import_src_blank": "空白页",
         "import_src_dup": "复制页",
         "page_label": "第 {page} 页",
+        "page_label_orig": "原第 {page} 页",
+        "page_label_inserted": "插入页",
         "del_page": "删页",
         "del_page_tip": "把当前页从输出中删除（页面整理里可恢复）",
         "page_deleted": "{label}已从输出中删除，还剩 {n} 页；可在「页面整理」恢复",
@@ -170,6 +173,11 @@ STRINGS = {
         "not_analyzed": "未分析",
         "pages_filter_bad": "页码范围无法识别：{text}",
         "no_output_pages": "输出里已经没有页面了：请检查删掉的页面或页码范围设置。",
+        "pages_filter_hint": "生成时只输出：{text}（按整理后的页码，共 {n} 页）",
+        "pages_filter_empty": "页码范围里没有可用的页",
+        "pages_filter_range": "页码超出范围（共 {n} 页）",
+        "organize_fullscreen": "全屏",
+        "organize_windowed": "退出全屏",
         "ctx_move_up": "上移",
         "ctx_move_down": "下移",
         "ctx_delete_page": "删除此页",
@@ -289,7 +297,7 @@ STRINGS = {
         "min_full": "Keep at least this share of the original",
         "min_page": "Keep at least this share on sparse pages",
         "pages_section": "Pages (optional)",
-        "pages_only": "Only these pages (analyze + export)",
+        "pages_only": "Only these pages (arranged numbers)",
         "pages_ph": "Subset of pages, e.g. 1,14,20-23",
         "inspect_pages": "Inspection pages",
         "inspect_ph": "Render review images for these pages after export",
@@ -337,7 +345,7 @@ STRINGS = {
         "rotate_all_done_no_plans": "All pages rotated {dir}. Click Analyze to check, or Export PDF directly.",
         "organize_btn": "Organize pages…",
         "organize_title": "Organize pages",
-        "organize_hint": "No analysis needed first. Drag entries or use the buttons to reorder (entries show page thumbnails). Delete moves source pages out of the export (Restore puts them back at the end); deleting an inserted page removes it entirely. Unanalyzed pages are processed automatically at export time. The order only affects the exported PDF; source files are never touched.",
+        "organize_hint": "No analysis needed first; page numbers are the arranged ones and inserted pages behave exactly like source pages. Thumbnails flow several per row - drag to reorder or press Full screen. Delete moves source pages out of the export (Restore puts them back at the end); deleting an inserted page removes it entirely. Unanalyzed pages are processed automatically at export time; the order only affects the exported PDF and source files are never touched.",
         "organize_deleted_label": "Deleted pages (restorable):",
         "org_move_up": "Move up",
         "org_move_down": "Move down",
@@ -368,6 +376,8 @@ STRINGS = {
         "import_src_blank": "blank page",
         "import_src_dup": "duplicate",
         "page_label": "page {page}",
+        "page_label_orig": "was page {page}",
+        "page_label_inserted": "inserted page",
         "del_page": "Delete",
         "del_page_tip": "Remove the current page from the export (restorable in Organize pages)",
         "page_deleted": "{label} removed from the export, {n} pages left; restore it via Organize pages",
@@ -377,6 +387,11 @@ STRINGS = {
         "not_analyzed": "Not analyzed yet",
         "pages_filter_bad": "Cannot read the page range: {text}",
         "no_output_pages": "No pages left in the output: check deleted pages or the page range.",
+        "pages_filter_hint": "Export only: {text} (arranged numbers, {n} pages)",
+        "pages_filter_empty": "The page range matches no page",
+        "pages_filter_range": "Page number out of range ({n} pages)",
+        "organize_fullscreen": "Full screen",
+        "organize_windowed": "Exit full screen",
         "ctx_move_up": "Move up",
         "ctx_move_down": "Move down",
         "ctx_delete_page": "Delete this page",
@@ -1084,39 +1099,18 @@ class PageOrganizeDialog(QDialog):
         self._thumbs = thumbs or {}
         self._requests: list[dict] = []
         self.setWindowTitle(tr("organize_title"))
-        self.resize(560, 640)
+        self.resize(1080, 760)
         layout = QVBoxLayout(self)
         hint = QLabel(tr("organize_hint"))
         hint.setWordWrap(True)
         layout.addWidget(hint)
         self.list = QListWidget()
-        self.list.setIconSize(QSize(84, 116))
-        self.list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
-        self.list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        for key, label in entries:
-            self.list.addItem(self._make_item(key, label))
+        self._make_grid(self.list, QSize(132, 176), QSize(156, 210))
+        for key, note in entries:
+            self.list.addItem(self._make_item(key, note))
+        self.list.model().rowsInserted.connect(lambda *args: QTimer.singleShot(0, self._renumber))
+        self.list.model().rowsRemoved.connect(lambda *args: QTimer.singleShot(0, self._renumber))
         layout.addWidget(self.list, 1)
-        self.deleted_label = QLabel(tr("organize_deleted_label"))
-        self.deleted_list = QListWidget()
-        self.deleted_list.setIconSize(QSize(56, 78))
-        self.deleted_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.deleted_list.setMaximumHeight(130)
-        has_deleted = bool(deleted)
-        self.deleted_label.setVisible(has_deleted)
-        self.deleted_list.setVisible(has_deleted)
-        for key, label in deleted:
-            self.deleted_list.addItem(self._make_item(key, label, deleted=True))
-        layout.addWidget(self.deleted_label)
-        layout.addWidget(self.deleted_list)
-
-    def _make_item(self, key: int, label: str, deleted: bool = False) -> QListWidgetItem:
-        item = QListWidgetItem(label)
-        item.setData(Qt.ItemDataRole.UserRole, int(key))
-        icon = self._thumbs.get(key)
-        if icon is not None:
-            item.setIcon(QIcon(icon))
-        return item
-
         row1 = QHBoxLayout()
         for text, handler in (
             (tr("org_move_up"), self._move_up),
@@ -1127,6 +1121,10 @@ class PageOrganizeDialog(QDialog):
             button = QPushButton(text)
             button.clicked.connect(handler)
             row1.addWidget(button)
+        self.fullscreen_btn = QPushButton(tr("organize_fullscreen"))
+        self.fullscreen_btn.clicked.connect(self._toggle_fullscreen)
+        row1.addStretch(1)
+        row1.addWidget(self.fullscreen_btn)
         layout.addLayout(row1)
         row2 = QHBoxLayout()
         for text, handler in (
@@ -1148,10 +1146,80 @@ class PageOrganizeDialog(QDialog):
             row3.addWidget(button)
         row3.addStretch(1)
         layout.addLayout(row3)
+        self.deleted_label = QLabel(tr("organize_deleted_label"))
+        self.deleted_list = QListWidget()
+        self._make_grid(self.deleted_list, QSize(64, 86), QSize(88, 118))
+        self.deleted_list.setMaximumHeight(140)
+        has_deleted = bool(deleted)
+        self.deleted_label.setVisible(has_deleted)
+        self.deleted_list.setVisible(has_deleted)
+        for key, note in deleted:
+            self.deleted_list.addItem(self._make_item(key, note, deleted=True))
+        self.deleted_list.model().rowsInserted.connect(lambda *args: QTimer.singleShot(0, self._renumber))
+        self.deleted_list.model().rowsRemoved.connect(lambda *args: QTimer.singleShot(0, self._renumber))
+        self._renumber()
+        layout.addWidget(self.deleted_label)
+        layout.addWidget(self.deleted_list)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    @staticmethod
+    def _make_grid(view: QListWidget, icon_size: QSize, cell_size: QSize) -> None:
+        """Thumbnail grid: several pages per row, wrapping, drag to reorder."""
+        view.setViewMode(QListView.ViewMode.IconMode)
+        view.setFlow(QListView.Flow.LeftToRight)
+        view.setWrapping(True)
+        view.setResizeMode(QListView.ResizeMode.Adjust)
+        view.setMovement(QListView.Movement.Static)
+        view.setUniformItemSizes(True)
+        view.setWordWrap(True)
+        view.setIconSize(icon_size)
+        view.setGridSize(cell_size)
+        view.setSpacing(2)
+        view.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+
+    def _make_item(self, key: int, note: str = "", deleted: bool = False) -> QListWidgetItem:
+        item = QListWidgetItem()
+        item.setData(Qt.ItemDataRole.UserRole, int(key))
+        item.setData(Qt.ItemDataRole.UserRole + 1, note)
+        icon = self._thumbs.get(key)
+        if icon is not None:
+            item.setIcon(QIcon(icon))
+        return item
+
+    def _renumber(self) -> None:
+        """Page numbers follow the current arrangement, exactly like the output PDF."""
+        for row in range(self.list.count()):
+            item = self.list.item(row)
+            note = item.data(Qt.ItemDataRole.UserRole + 1) or ""
+            text = self._tr("page_label", page=row + 1)
+            item.setText(f"{text} · {note}" if note else text)
+        for row in range(self.deleted_list.count()):
+            item = self.deleted_list.item(row)
+            key = int(item.data(Qt.ItemDataRole.UserRole))
+            note = item.data(Qt.ItemDataRole.UserRole + 1) or ""
+            text = self._tr("page_label_orig", page=key)
+            item.setText(f"{text} · {note}" if note else text)
+
+    def _toggle_fullscreen(self) -> None:
+        if self.isFullScreen():
+            self.showNormal()
+            self.fullscreen_btn.setText(self._tr("organize_fullscreen"))
+        else:
+            self.showFullScreen()
+            self.fullscreen_btn.setText(self._tr("organize_windowed"))
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_F11:
+            self._toggle_fullscreen()
+            return
+        if event.key() == Qt.Key.Key_Escape and self.isFullScreen():
+            self._toggle_fullscreen()
+            return
+        super().keyPressEvent(event)
 
     def _insert_index(self) -> int:
         row = self.list.currentRow()
@@ -1164,6 +1232,7 @@ class PageOrganizeDialog(QDialog):
         item = self.list.takeItem(row)
         self.list.insertItem(row - 1, item)
         self.list.setCurrentRow(row - 1)
+        self._renumber()
 
     def _move_down(self) -> None:
         row = self.list.currentRow()
@@ -1172,34 +1241,40 @@ class PageOrganizeDialog(QDialog):
         item = self.list.takeItem(row)
         self.list.insertItem(row + 1, item)
         self.list.setCurrentRow(row + 1)
+        self._renumber()
 
     def _delete_selected(self) -> None:
-        for item in self.list.selectedItems():
+        for item in list(self.list.selectedItems()):
             key = int(item.data(Qt.ItemDataRole.UserRole))
             self.list.takeItem(self.list.row(item))
             if key < crop.IMPORT_PAGE_BASE:
                 self.deleted_list.addItem(item)
                 self.deleted_label.setVisible(True)
                 self.deleted_list.setVisible(True)
+        self._renumber()
 
     def _restore_selected(self) -> None:
-        for item in self.deleted_list.selectedItems():
+        for item in list(self.deleted_list.selectedItems()):
             self.deleted_list.takeItem(self.deleted_list.row(item))
             self.list.addItem(item)
         if self.deleted_list.count() == 0:
             self.deleted_label.setVisible(False)
             self.deleted_list.setVisible(False)
+        self._renumber()
 
     def _reset_order(self) -> None:
         keys = [self.list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.list.count())]
         keys += [self.deleted_list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.deleted_list.count())]
+        notes = {int(self.list.item(i).data(Qt.ItemDataRole.UserRole)): self.list.item(i).data(Qt.ItemDataRole.UserRole + 1) for i in range(self.list.count())}
+        notes.update({int(self.deleted_list.item(i).data(Qt.ItemDataRole.UserRole)): self.deleted_list.item(i).data(Qt.ItemDataRole.UserRole + 1) for i in range(self.deleted_list.count())})
         for key in sorted(keys):
-            self.list.addItem(self._make_item(key, self._label_for(key)))
+            self.list.addItem(self._make_item(key, notes.get(key) or ""))
         while self.list.count() > len(keys):
             self.list.takeItem(0)
         self.deleted_list.clear()
         self.deleted_label.setVisible(False)
         self.deleted_list.setVisible(False)
+        self._renumber()
 
     def _label_for(self, key: int) -> str:
         for row in range(self.list.count()):
@@ -2026,8 +2101,8 @@ class PdfCropWindow(QMainWindow):
             if hasattr(self, "fs_page_info"):
                 self.fs_page_info.setText(self.page_info.text())
             self.crop_label.setText(f"{self.t('crop_box')}：-")
-        elif self.current_page in self.plans:
-            self.show_plan(self.current_page)
+        elif self._current_key() in self.plans:
+            self.show_plan(self._current_key())
         elif self.src is not None:
             self.page_info.setText(self.t("pages_total", pages=self.pdf_pages))
             if hasattr(self, "fs_page_info"):
@@ -2134,9 +2209,9 @@ class PdfCropWindow(QMainWindow):
         except Exception as exc:
             self.append_log(self.t("preview_fail", exc=exc))
             return
-        self.current_page = page
+        self.current_page = self._pos_of(page) or self.current_page
         self.page_spin.blockSignals(True)
-        self.page_spin.setValue(page)
+        self.page_spin.setValue(self.current_page)
         self.page_spin.blockSignals(False)
         angle = float(self._stored_rotates.get(page, 0.0) or 0.0)
         if abs(angle) > 1e-6:
@@ -2158,65 +2233,103 @@ class PdfCropWindow(QMainWindow):
             self.fs_page_info.setText(self.t("pages_total", pages=self.pdf_pages))
 
     def goto_page(self, page: int) -> None:
+        """Go to a 1-based position in the arranged output (inserted pages included)."""
         if self.pdf_pages <= 0:
             return
         if self.page_list:
-            if page not in self.page_list:
-                page = min(self.page_list, key=lambda item: (abs(item - page), item))
+            page = max(1, min(len(self.page_list), page))
         else:
             page = max(1, min(self.pdf_pages, page))
         self.current_page = page
-        if page in self.plans:
-            self.show_plan(page)
+        self.page_spin.blockSignals(True)
+        self.page_spin.setValue(page)
+        self.page_spin.blockSignals(False)
+        key = self._current_key()
+        if key is not None and key in self.plans:
+            self.show_plan(key)
         elif self.src is not None:
-            self.show_pdf_preview(page)
+            self.show_pdf_preview(key if key is not None else page)
 
     def step_page(self, delta: int) -> None:
-        """Move through the output order; raw page numbers cannot reach inserted pages."""
-        if self.page_list and self.current_page in self.page_list:
-            target = self.page_list.index(self.current_page) + delta
-            if 0 <= target < len(self.page_list):
-                self.goto_page(self.page_list[target])
-            return
+        """Move through the arranged output, one page at a time."""
         self.goto_page(self.current_page + delta)
 
+    def _current_key(self) -> int | None:
+        """Internal key of the page at the current position (inserts included)."""
+        if self.page_list and 1 <= self.current_page <= len(self.page_list):
+            return self.page_list[self.current_page - 1]
+        return None
+
+    def _pos_of(self, key: int) -> int:
+        """1-based position of an internal key in the output; 0 when absent."""
+        try:
+            return self.page_list.index(key) + 1
+        except ValueError:
+            return 0
+
     def _sync_page_spin_range(self) -> None:
-        top = max(self.page_list) if self.page_list else self.pdf_pages
+        top = len(self.page_list) if self.page_list else self.pdf_pages
         self.page_spin.blockSignals(True)
         self.page_spin.setRange(1, max(1, top))
         self.page_spin.setValue(self.current_page)
         self.page_spin.blockSignals(False)
 
     def _pages_filter(self) -> set[int] | None:
-        """Source-page subset from the pages field; None means the whole book."""
+        """Selected output positions from the pages field; None means every page."""
         text = self.pages_edit.text().strip()
-        if not text or self.src is None or self.pdf_pages <= 0:
+        if not text or self.src is None:
             return None
         try:
             pages = crop.parse_page_spec(text)
         except ValueError:
             return None
-        return {page for page in pages if 1 <= page <= self.pdf_pages} or None
+        total = len(self.page_list) or self.pdf_pages
+        return {pos for pos in pages if 1 <= pos <= total}
 
     def _source_page_keys(self) -> set[int]:
-        """Source pages that take part in the output, with the filter applied."""
+        """Every source page of the book (deleted and filtered ones included)."""
         if self.pdf_pages <= 0:
             return set()
-        return self._pages_filter() or set(range(1, self.pdf_pages + 1))
+        return set(range(1, self.pdf_pages + 1))
+
+    def _ordered_output_keys(self) -> list[int]:
+        """Keys written by 生成 PDF: the arrangement narrowed by the page selection."""
+        keys = self._ordered_keys()
+        selected = self._pages_filter()
+        if selected is None:
+            return keys
+        return [keys[pos - 1] for pos in sorted(selected) if 1 <= pos <= len(keys)]
+
+    def _selected_source_pages(self) -> set[int] | None:
+        """Source pages needed for the selected positions; None means all of them."""
+        selected = self._pages_filter()
+        if selected is None:
+            return None
+        keys = self._ordered_keys()
+        return {
+            keys[pos - 1]
+            for pos in selected
+            if 1 <= pos <= len(keys) and keys[pos - 1] < crop.IMPORT_PAGE_BASE
+        }
 
     def _pages_filter_changed(self) -> None:
         text = self.pages_edit.text().strip()
         if text:
             try:
-                crop.parse_page_spec(text)
+                pages = crop.parse_page_spec(text)
             except ValueError as exc:
                 self.status.setText(self.t("pages_filter_bad", text=exc))
                 return
-        self.page_list = self._ordered_keys()
-        self._sync_page_spin_range()
+            if not pages or not self.page_list:
+                self.status.setText(self.t("pages_filter_empty"))
+                return
+            if max(pages) > len(self.page_list):
+                self.status.setText(self.t("pages_filter_range", n=len(self.page_list)))
+                return
+            self.status.setText(self.t("pages_filter_hint", text=text, n=len(self.page_list)))
         self._refresh_table()
-        if self.current_page not in self.page_list and self.page_list:
-            self.goto_page(self.page_list[0])
+        if self.page_list and self.current_page > len(self.page_list):
+            self.goto_page(len(self.page_list))
 
     def eventFilter(self, watched, event) -> bool:
         if event.type() == QEvent.Type.KeyPress:
@@ -2261,10 +2374,7 @@ class PdfCropWindow(QMainWindow):
         rows = self.table.selectionModel().selectedRows()
         if not rows:
             return
-        item = self.table.item(rows[0].row(), 0)
-        page = int(item.data(Qt.ItemDataRole.UserRole)) if item is not None else 0
-        if page > 0:
-            self.goto_page(page)
+        self.goto_page(rows[0].row() + 1)
 
     def show_plan(self, page: int) -> None:
         plan = self.plans[page]
@@ -2276,9 +2386,9 @@ class PdfCropWindow(QMainWindow):
         except Exception as exc:
             self.append_log(self.t("open_page_fail", page=page, exc=exc))
             return
-        self.current_page = page
+        self.current_page = self._pos_of(page) or self.current_page
         self.page_spin.blockSignals(True)
-        self.page_spin.setValue(page)
+        self.page_spin.setValue(self.current_page)
         self.page_spin.blockSignals(False)
         self.view.full_size = (plan.width, plan.height)
         self.view.pixmap = display_pix
@@ -2327,9 +2437,10 @@ class PdfCropWindow(QMainWindow):
         self._apply_manual_crop(box)
 
     def _coords_changed(self) -> None:
-        if self._updating or self.current_page not in self.plans:
+        key = self._current_key()
+        if self._updating or key not in self.plans:
             return
-        plan = self.plans[self.current_page]
+        plan = self.plans[key]
         box = crop.clamp_crop(
             (self.left_spin.value(), self.top_spin.value(), self.right_spin.value(), self.bottom_spin.value()),
             plan.width,
@@ -2339,7 +2450,7 @@ class PdfCropWindow(QMainWindow):
         self._apply_manual_crop(box)
 
     def _apply_manual_crop(self, box: tuple[int, int, int, int]) -> None:
-        plan = self.plans.get(self.current_page)
+        plan = self.plans.get(self._current_key())
         if plan is None:
             return
         plan.crop = box
@@ -2401,8 +2512,8 @@ class PdfCropWindow(QMainWindow):
         self.page_list = self._ordered_keys()
         self._sync_page_spin_range()
         self._refresh_table()
-        if self.src is not None and self.pdf_pages:
-            self.show_pdf_preview(max(1, min(self.current_page, self.pdf_pages)))
+        if self.page_list:
+            self.goto_page(min(self.current_page, len(self.page_list)))
 
     def forget_edits(self) -> None:
         if self.src is None or self.busy or self._rotate_busy:
@@ -2516,9 +2627,10 @@ class PdfCropWindow(QMainWindow):
         self.view.set_live_angle(angle)
 
     def _rotate_commit(self, angle: float | None = None) -> None:
-        if self._updating or self.current_page not in self.plans:
+        key = self._current_key()
+        if self._updating or key not in self.plans:
             return
-        plan = self.plans[self.current_page]
+        plan = self.plans[key]
         if angle is None:
             angle = float(self.rotate_spin.value())
         angle = clamp_angle(float(angle))
@@ -2538,9 +2650,9 @@ class PdfCropWindow(QMainWindow):
         self._rotate_busy = True
         self._rotate_pending = None
         if reset:
-            self.status.setText(self.t("resetting", page=plan.page))
+            self.status.setText(self.t("resetting", page=self._page_label(plan.page)))
         else:
-            self.status.setText(self.t("rotating", page=plan.page, angle=angle))
+            self.status.setText(self.t("rotating", page=self._page_label(plan.page), angle=angle))
         kwargs = self._analyze_kwargs()
 
         def work() -> None:
@@ -2564,9 +2676,10 @@ class PdfCropWindow(QMainWindow):
         threading.Thread(target=work, daemon=True).start()
 
     def reset_current_auto(self) -> None:
-        if self.current_page not in self.plans or self._rotate_busy:
+        key = self._current_key()
+        if key not in self.plans or self._rotate_busy:
             return
-        plan = self.plans[self.current_page]
+        plan = self.plans[key]
         # Keep a hand-set angle; an auto-deskewed page is simply deskewed again.
         manual_angle = abs(plan.rotate_deg) > 1e-6 and "auto-rotate" not in plan.note
         self._start_rotate_job(
@@ -2580,17 +2693,18 @@ class PdfCropWindow(QMainWindow):
         return crop.clamp_crop((0, 0, plan.width, plan.height), plan.width, plan.height)
 
     def keep_current_full(self) -> None:
-        if self.current_page not in self.plans:
+        key = self._current_key()
+        if key not in self.plans:
             QMessageBox.information(self, self.t("app_title"), self.t("need_analyze_keep"))
             return
-        plan = self.plans[self.current_page]
+        plan = self.plans[key]
         self._apply_manual_crop(self._full_page_box(plan))
         if "keep-full" not in plan.note:
             plan.note = f"{plan.note}+keep-full"
         self.view.set_crop(plan.crop)
         self.show_plan(plan.page)
         self._update_table_row(plan.page)
-        self.status.setText(self.t("kept_full_page", page=plan.page))
+        self.status.setText(self.t("kept_full_page", page=self._page_label(plan.page)))
 
     def keep_all_full(self) -> None:
         if not self.plans:
@@ -2604,9 +2718,10 @@ class PdfCropWindow(QMainWindow):
                 plan.note = "manual-override+keep-full"
             elif "keep-full" not in plan.note:
                 plan.note = f"{plan.note}+keep-full"
-        if self.current_page in self.plans:
-            self.view.set_crop(self.plans[self.current_page].crop)
-            self.show_plan(self.current_page)
+        key = self._current_key()
+        if key in self.plans:
+            self.view.set_crop(self.plans[key].crop)
+            self.show_plan(key)
         self._refresh_table()
         self._save_edits()
         self.status.setText(self.t("kept_full_all", n=len(self.plans)))
@@ -2615,9 +2730,12 @@ class PdfCropWindow(QMainWindow):
     # ------------------------------------------------------------------ helpers
 
     def _page_label(self, key: int) -> str:
-        if key >= crop.IMPORT_PAGE_BASE:
-            return self.t("import_page_label", n=key - crop.IMPORT_PAGE_BASE + 1)
-        return self.t("page_label", page=key)
+        pos = self._pos_of(key)
+        if pos:
+            return self.t("page_label", page=pos)
+        if key < crop.IMPORT_PAGE_BASE:
+            return self.t("page_label_orig", page=key)
+        return self.t("page_label_inserted")
 
     def _page_item(self, page: int) -> QTableWidgetItem:
         item = QTableWidgetItem(self._page_label(page))
@@ -2696,8 +2814,8 @@ class PdfCropWindow(QMainWindow):
         if margins is None:
             restored_bases, self._uniform_base = self._uniform_base, {}
         if not self.plans:
-            if self.src is not None and self.pdf_pages:
-                self.show_pdf_preview(max(1, min(self.current_page, self.pdf_pages)))
+            if self.page_list:
+                self.goto_page(min(self.current_page, len(self.page_list)))
             if margins is not None:
                 message = self.t("uniform_set_no_plans", margins=self._uniform_text(margins))
                 self.status.setText(message)
@@ -2716,9 +2834,10 @@ class PdfCropWindow(QMainWindow):
                 base = restored_bases.pop(plan.page, None)
                 if base is not None:
                     plan.crop, plan.note = base
-        if self.current_page in self.plans:
-            self.view.set_crop(self.plans[self.current_page].crop)
-            self.show_plan(self.current_page)
+        key = self._current_key()
+        if key in self.plans:
+            self.view.set_crop(self.plans[key].crop)
+            self.show_plan(key)
         self._refresh_table()
         self._save_edits()
         if margins is not None:
@@ -2832,9 +2951,9 @@ class PdfCropWindow(QMainWindow):
         if self.busy or self._rotate_busy:
             return
         keys = self._ordered_keys()
-        entries = [(key, self._organize_label(key)) for key in keys]
+        entries = [(key, self._page_note(key)) for key in keys]
         deleted_keys = sorted(key for key in self._deleted if key < crop.IMPORT_PAGE_BASE)
-        deleted = [(key, self._organize_label(key)) for key in deleted_keys]
+        deleted = [(key, self._page_note(key)) for key in deleted_keys]
         thumbs = self._thumb_pixmaps(keys + deleted_keys)
         dialog = PageOrganizeDialog(self, entries, deleted, self.t, thumbs)
         if dialog.exec() != QDialog.DialogCode.Accepted:
@@ -2844,10 +2963,9 @@ class PdfCropWindow(QMainWindow):
         for request in requests:
             self._start_insert_request(request)
 
-    def _organize_label(self, key: int) -> str:
+    def _page_note(self, key: int) -> str:
         plan = self.plans.get(key)
-        note = plan.note if plan is not None else self.t("not_analyzed")
-        return f"{self._page_label(key)}{' · ' + note if note else ''}"
+        return plan.note if plan is not None else self.t("not_analyzed")
 
     def _thumb_pixmaps(self, keys) -> dict[int, QPixmap]:
         """Small page images for the organizer; cached per page and source file."""
@@ -2895,8 +3013,8 @@ class PdfCropWindow(QMainWindow):
         self._refresh_table()
         self._save_edits()
         self.status.setText(self.t("pages_reordered", n=len(self.page_list)))
-        if self.current_page not in self.plans and self.page_list:
-            self.goto_page(self.page_list[0])
+        if self.page_list:
+            self.goto_page(min(self.current_page, len(self.page_list)))
 
     def _on_table_reorder(self, source_row: int, target_row: int) -> None:
         keys = self._ordered_keys()
@@ -2969,8 +3087,8 @@ class PdfCropWindow(QMainWindow):
             self.status.setText(self.t("page_deleted", label=self._page_label(keys[0]), n=len(self.page_list)))
         else:
             self.status.setText(self.t("pages_deleted", n=len(keys), m=len(self.page_list)))
-        if self.current_page not in self.plans and self.page_list:
-            self.goto_page(self.page_list[0])
+        if self.page_list:
+            self.goto_page(min(self.current_page, len(self.page_list)))
 
     def _restore_pages(self, keys: list[int]) -> None:
         order = self._materialize_order()
@@ -2988,8 +3106,8 @@ class PdfCropWindow(QMainWindow):
     def delete_current_page(self) -> None:
         if self.src is None or self.busy or self._rotate_busy:
             return
-        key = self.current_page
-        if key >= crop.IMPORT_PAGE_BASE and key not in self.plans:
+        key = self._current_key()
+        if key is None:
             return
         self._delete_pages([key])
 
@@ -3168,7 +3286,9 @@ class PdfCropWindow(QMainWindow):
         self.status.setText(message)
         self.append_log(message)
         if request["keys"]:
-            self.goto_page(request["keys"][0])
+            pos = self._pos_of(request["keys"][0])
+            if pos:
+                self.goto_page(pos)
         self._pump_requests()
 
     # ------------------------------------------------------- import persistence
@@ -3227,6 +3347,10 @@ class PdfCropWindow(QMainWindow):
             QMessageBox.critical(self, self.t("app_title"), self.t("same_path"))
             return
         job.write_pdf = False
+        output_order = self._ordered_output_keys()
+        analyze_pages = sorted(
+            key for key in output_order if key < crop.IMPORT_PAGE_BASE
+        )
         self._set_busy(True)
         self.cancel.clear()
         self.append_log(self.t("write_preview", name=job.output.name))
@@ -3237,15 +3361,19 @@ class PdfCropWindow(QMainWindow):
                     crop.check_cancelled(self.cancel)
                     self.events.put(("progress", message, current, total))
 
-                source_plans = crop.execute_job(job, progress=progress, cancel=self.cancel)
+                # Only the pages that survive the arrangement and the selection
+                # need analysis; with inserts alone there is nothing to render.
+                if analyze_pages:
+                    job.pages = analyze_pages
+                    source_plans = crop.execute_job(job, progress=progress, cancel=self.cancel)
+                else:
+                    source_plans = []
                 fresh = {plan.page: plan for plan in source_plans}
                 by_key = {
                     key: plan for key, plan in self.plans.items() if key >= crop.IMPORT_PAGE_BASE
                 }
                 by_key.update(fresh)
-                all_keys = set(by_key) | self._source_page_keys()
-                order = self._order_keys(all_keys, self._page_order, self._deleted)
-                plans = [by_key[key] for key in order]
+                plans = [by_key[key] for key in output_order if key in by_key]
                 crop.write_pdf_from_plans(plans, job.output, progress, self.cancel, source=job.src)
                 if job.ocr:
                     crop.apply_ocr_to_pdf(
@@ -3329,8 +3457,15 @@ class PdfCropWindow(QMainWindow):
         src = Path(self.input_edit.text().strip())
         output = Path(self.output_edit.text().strip() or crop.default_output_for(src))
         work = Path(self.work_edit.text().strip() or crop.default_work_dir_for(src))
-        pages = crop.parse_page_spec(self.pages_edit.text()) or None
-        inspect_pages = crop.parse_page_spec(self.inspect_edit.text())
+        selected = self._selected_source_pages()
+        pages = sorted(selected) if selected else None
+        inspect_spec = crop.parse_page_spec(self.inspect_edit.text())
+        inspect_keys = self._ordered_output_keys()
+        inspect_pages = [
+            inspect_keys[pos - 1]
+            for pos in inspect_spec
+            if 1 <= pos <= len(inspect_keys) and inspect_keys[pos - 1] < crop.IMPORT_PAGE_BASE
+        ]
         inspect_dir = output.with_name(output.stem + "_检查图") if inspect_pages else None
         # Saved edits plus the current page states; auto-deskew angles are re-estimated, not pinned.
         manual, rotates = self._current_edits()
@@ -3364,18 +3499,19 @@ class PdfCropWindow(QMainWindow):
     def ocr_current_page(self) -> None:
         if self.busy:
             return
-        if self.current_page not in self.plans:
+        key = self._current_key()
+        if key not in self.plans:
             QMessageBox.information(self, self.t("app_title"), self.t("need_analyze_ocr"))
             return
         if not crop.ocr_available():
             QMessageBox.warning(self, self.t("app_title"), self._ocr_missing())
             return
-        plan = self.plans[self.current_page]
+        plan = self.plans[key]
         ref = crop.find_text_companion(self.src) if self.src is not None else None
         if ref is not None:
             self.append_log(self.t("used_ref", name=ref.name))
         self._set_busy(True, cancellable=False)
-        self.status.setText(self.t("ocr_page_running", page=plan.page))
+        self.status.setText(self.t("ocr_page_running", page=self._page_label(plan.page)))
 
         def work() -> None:
             # Several Tesseract runs take seconds; keep them off the UI thread.
@@ -3396,7 +3532,7 @@ class PdfCropWindow(QMainWindow):
 
     def _show_ocr_page(self, page: int, text: str) -> None:
         dialog = QDialog(self)
-        dialog.setWindowTitle(self.t("ocr_page_title", page=page))
+        dialog.setWindowTitle(self.t("ocr_page_title", page=self._page_label(page)))
         dialog.resize(640, 520)
         layout = QVBoxLayout(dialog)
         view = QPlainTextEdit()
@@ -3473,11 +3609,18 @@ class PdfCropWindow(QMainWindow):
         self.worker.start()
 
     def start_analyze(self) -> None:
+        selected = self._selected_source_pages()
+        if selected is not None and not selected:
+            self.status.setText(self.t("pages_filter_empty"))
+            return
         self._start_job(write_pdf=False, title=self.t("analyze"))
 
     def start_generate(self) -> None:
-        keys = self._ordered_keys()
-        missing = [key for key in keys if key not in self.plans]
+        output_keys = self._ordered_output_keys()
+        if self.src is not None and not output_keys:
+            QMessageBox.information(self, self.t("app_title"), self.t("no_output_pages"))
+            return
+        missing = [key for key in output_keys if key not in self.plans]
         if self.plans and not missing:
             # Every page in the arranged output already has a plan: write directly.
             try:
@@ -3487,17 +3630,12 @@ class PdfCropWindow(QMainWindow):
                 return
             self._start_write_only(job)
             return
-        if self.src is not None and not keys:
-            # Every page was deleted or filtered out; without a source the
-            # classic path below reports the missing input as usual.
-            QMessageBox.information(self, self.t("app_title"), self.t("no_output_pages"))
-            return
         arranged = bool(
             self._page_order is not None
             or self._deleted
             or self._imports
             or missing
-            or self._pages_filter()
+            or self._pages_filter() is not None
         )
         if self.plans or arranged:
             # Some output pages are not analyzed yet (or only inserts exist):
@@ -3517,7 +3655,7 @@ class PdfCropWindow(QMainWindow):
         if job.src.resolve() == job.output.resolve():
             QMessageBox.critical(self, self.t("app_title"), self.t("same_path"))
             return
-        plans = [self.plans[page] for page in self._ordered_keys()]
+        plans = [self.plans[page] for page in self._ordered_output_keys()]
         self._set_busy(True)
         self.cancel.clear()
         self.append_log(self.t("write_preview", name=job.output.name))
@@ -3661,8 +3799,8 @@ class PdfCropWindow(QMainWindow):
                     self._set_busy(False)
                     self._refresh_table()
                     self._save_edits()
-                    if self.src is not None and self.pdf_pages:
-                        self.show_pdf_preview(max(1, min(self.current_page, self.pdf_pages)))
+                    if self.page_list:
+                        self.goto_page(min(self.current_page, len(self.page_list)))
                     message = self.t("rotate_all_done_no_plans", dir=direction)
                     self.status.setText(message)
                     self.append_log(message)
@@ -3671,8 +3809,9 @@ class PdfCropWindow(QMainWindow):
                 elif kind == "ocr-page-done":
                     _, page, text = event
                     self._set_busy(False)
-                    self.status.setText(self.t("ocr_page_done", page=page, n=len(text)))
-                    self.append_log(self.t("ocr_page_done", page=page, n=len(text)))
+                    label = self._page_label(page)
+                    self.status.setText(self.t("ocr_page_done", page=label, n=len(text)))
+                    self.append_log(self.t("ocr_page_done", page=label, n=len(text)))
                     # Open the dialog after this drain pass so its event loop does not nest in it.
                     QTimer.singleShot(0, lambda page=page, text=text: self._show_ocr_page(page, text))
                 elif kind == "ocr-page-failed":
@@ -3698,17 +3837,19 @@ class PdfCropWindow(QMainWindow):
         self._preview_cache.pop(str(updated.path), None)
         if updated.source_path != updated.path:
             self._preview_cache.pop(str(updated.source_path), None)
-        if self.current_page == updated.page:
+        if self._current_key() == updated.page:
             self.show_plan(updated.page)
         self._refresh_table()
         self._save_edits()
         if reset:
-            self.status.setText(self.t("reset_done", page=updated.page))
-            self.append_log(self.t("reset_done", page=updated.page))
+            label = self._page_label(updated.page)
+            self.status.setText(self.t("reset_done", page=label))
+            self.append_log(self.t("reset_done", page=label))
         else:
-            self.status.setText(self.t("rotated", page=updated.page, angle=updated.rotate_deg))
+            label = self._page_label(updated.page)
+            self.status.setText(self.t("rotated", page=label, angle=updated.rotate_deg))
             self.append_log(
-                self.t("rotated_log", page=updated.page, angle=updated.rotate_deg, note=updated.note)
+                self.t("rotated_log", page=label, angle=updated.rotate_deg, note=updated.note)
             )
         if self._rotate_pending is not None:
             pending = self._rotate_pending
@@ -3744,7 +3885,7 @@ class PdfCropWindow(QMainWindow):
                     self._uniform_base[plan.page] = (base_box, plan.note)
         self._save_edits()
         if self.page_list:
-            self.goto_page(self.page_list[0])
+            self.goto_page(min(self.current_page, len(self.page_list)))
         if wrote:
             self.last_output = job.output
             self.status.setText(self.t("generated", name=job.output.name, n=len(plans)))
@@ -3967,10 +4108,12 @@ def run_self_test(report: Path) -> int:
             assert window.page_list == [1, 2, 3] and not window._deleted, window.page_list
             window.pages_edit.setText("2")
             window._pages_filter_changed()
-            assert window.page_list == [2], window.page_list
+            window.pages_edit.setText("2-3")
+            window._pages_filter_changed()
+            assert len(window._ordered_output_keys()) == 2, window._ordered_output_keys()
             window.pages_edit.clear()
             window._pages_filter_changed()
-            assert window.page_list == [1, 2, 3], window.page_list
+            assert len(window._ordered_output_keys()) == 3, window._ordered_output_keys()
             window._start_insert_request({"type": "blank", "index": 3})
             deadline = _time.time() + 30
             while _time.time() < deadline and (window.busy or window._pending_requests):
@@ -3978,12 +4121,15 @@ def run_self_test(report: Path) -> int:
                 _time.sleep(0.02)
             QApplication.processEvents()
             assert window.page_list == [1, 2, 3, crop.IMPORT_PAGE_BASE + 1], window.page_list
-            window.goto_page(crop.IMPORT_PAGE_BASE + 1)
-            assert window.current_page == crop.IMPORT_PAGE_BASE + 1, window.current_page
+            assert window.page_spin.maximum() == 4, window.page_spin.maximum()
+            expected = window.t("page_label", page=4)
+            assert window._page_label(crop.IMPORT_PAGE_BASE + 1) == expected, window._page_label(crop.IMPORT_PAGE_BASE + 1)
+            window.goto_page(4)
+            assert window.current_page == 4, window.current_page
             window.step_page(-1)
             assert window.current_page == 3, window.current_page
             window.step_page(1)
-            assert window.current_page == crop.IMPORT_PAGE_BASE + 1, window.current_page
+            assert window.current_page == 4, window.current_page
             window._delete_pages([crop.IMPORT_PAGE_BASE + 1])
             assert window.page_list == [1, 2, 3], window.page_list
             return f"list={window.page_list} thumbs={len(thumbs)} spin_max={window.page_spin.maximum()}"
