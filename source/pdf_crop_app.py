@@ -193,6 +193,7 @@ STRINGS = {
         "pages_filter_empty": "页码范围里没有可用的页",
         "pages_filter_range": "页码超出范围（共 {n} 页）",
         "organize_fullscreen": "全屏",
+        "pages_reordered_log": "已调整页面顺序，共 {n} 页",
         "insert_removed": "已移除 {n} 个插入页（记录与图片已清除）",
         "select_pages_btn": "按缩略图选页…",
         "select_pages_title": "选择要导出的页",
@@ -422,6 +423,7 @@ STRINGS = {
         "pages_filter_empty": "The page range matches no page",
         "pages_filter_range": "Page number out of range ({n} pages)",
         "organize_fullscreen": "Full screen",
+        "pages_reordered_log": "Page order updated, {n} page(s)",
         "insert_removed": "Removed {n} inserted page(s) (records and images cleared)",
         "select_pages_btn": "Pick pages...",
         "select_pages_title": "Choose pages to export",
@@ -998,7 +1000,16 @@ class ResultsTable(QTableWidget):
             return
         event.acceptProposedAction()
         event.setDropAction(Qt.DropAction.IgnoreAction)
-        self._reorder_handler(rows, target)
+        # Same reason as PageGrid: never rebuild the table inside dropEvent.
+        handler = self._reorder_handler
+        QTimer.singleShot(0, lambda: self._deferred_reorder(handler, rows, target))
+
+    @staticmethod
+    def _deferred_reorder(handler, rows: list[int], target: int) -> None:
+        try:
+            handler(rows, target)
+        except RuntimeError:
+            pass  # the window is gone
 
 
 class UniformCropDialog(QDialog):
@@ -1222,7 +1233,15 @@ class PageGrid(QListWidget):
             target = self.count()
         event.accept()
         event.setDropAction(Qt.DropAction.MoveAction)
-        self.move_rows(rows, target)
+        # Reordering inside dropEvent rebuilds items while Qt is still handling
+        # the drag, which can crash. Let the drag finish first.
+        QTimer.singleShot(0, lambda: self._deferred_move(rows, target))
+
+    def _deferred_move(self, rows: list[int], target: int) -> None:
+        try:
+            self.move_rows(rows, target)
+        except RuntimeError:
+            pass  # the dialog was closed before the timer fired
 
 
 class PageOrganizeDialog(QDialog):
@@ -3350,6 +3369,7 @@ class PdfCropWindow(QMainWindow):
         self._refresh_table()
         self._save_edits()
         self.status.setText(self.t("pages_reordered", n=len(self.page_list)))
+        self.append_log(self.t("pages_reordered_log", n=len(self.page_list)))
         self._reshow(shown)
 
     def _on_table_reorder(self, rows: list[int], target: int) -> None:
@@ -3381,6 +3401,7 @@ class PdfCropWindow(QMainWindow):
         for offset in range(len(block)):
             self.table.selectionModel().select(self.table.model().index(insert_at + offset, 0), flags)
         self._save_edits()
+        self.append_log(self.t("pages_reordered_log", n=len(self.page_list)))
         self.goto_page(insert_at + 1)
         self.status.setText(self.t("pages_reordered", n=len(keys)))
 
@@ -3421,6 +3442,7 @@ class PdfCropWindow(QMainWindow):
         self._refresh_table()
         self.table.selectRow(target)
         self._save_edits()
+        self.append_log(self.t("pages_reordered_log", n=len(self.page_list)))
         self._reshow(moved)
 
     def _delete_pages(self, keys: list[int]) -> None:
@@ -3445,6 +3467,7 @@ class PdfCropWindow(QMainWindow):
             self.status.setText(self.t("page_deleted", label=self._page_label(keys[0]), n=len(self.page_list)))
         else:
             self.status.setText(self.t("pages_deleted", n=len(keys), m=len(self.page_list)))
+        self.append_log(self.status.text())
         self._reshow(shown)
 
     def _restore_pages(self, keys: list[int]) -> None:
@@ -3460,6 +3483,7 @@ class PdfCropWindow(QMainWindow):
         self._refresh_table()
         self._save_edits()
         self.status.setText(self.t("pages_restored", n=len(keys)))
+        self.append_log(self.status.text())
         self._reshow(shown)
 
     def delete_current_page(self) -> None:
