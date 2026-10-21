@@ -118,7 +118,7 @@ STRINGS = {
         "reset_page": "恢复本页自动裁切",
         "keep_full_page": "本页不裁切",
         "keep_full_all": "全部不裁切（每页整页）",
-        "kept_full_page": "第 {page} 页已改为整页保留",
+        "kept_full_page": "{label}已改为整页保留",
         "kept_full_all": "已将 {n} 页改为整页保留，生成时不再裁切",
         "need_analyze_keep": "请先分析预览，再一键不裁切。",
         "uniform_btn": "统一裁边（全书同尺寸）…",
@@ -144,7 +144,7 @@ STRINGS = {
         "rotate_all_done_no_plans": "全书已{dir}。点「分析预览」检查，或直接点「生成 PDF」。",
         "organize_btn": "页面整理（排序 / 删页 / 插页）…",
         "organize_title": "页面整理",
-        "organize_hint": "不必先「分析预览」即可整理，页码就是整理后的页码（插入页与原有页完全等价）。缩略图一行多页，直接拖动即可移动页面（按住 Ctrl / Shift 可多选后一起拖）；几百页的书可用「移到第 N 页」一步跳转，或点「全屏」放大。删除所选把源页面移出输出（可用「恢复所选」放回末尾），删除插入页则是整个移除。未分析的页面在生成时会自动补算，顺序只影响生成的 PDF，不会改动源文件。",
+        "organize_hint": "不必先「分析预览」即可整理，页码就是整理后的页码（插入页与原有页完全等价）。缩略图一行多页，Ctrl + 滚轮可缩放缩略图，直接拖动即可移动页面（按住 Ctrl / Shift 可多选后一起拖）；插入页面会立即生效并关闭本窗口；几百页的书可用「移到第 N 页」一步跳转，或点「全屏」放大。删除所选把源页面移出输出（可用「恢复所选」放回末尾），删除插入页则是整个移除。未分析的页面在生成时会自动补算，顺序只影响生成的 PDF，不会改动源文件。",
         "organize_deleted_label": "已删除的页（可恢复）：",
         "org_move_up": "上移 ↑",
         "org_move_down": "下移 ↓",
@@ -172,7 +172,7 @@ STRINGS = {
         "ins_progress": "正在处理插入页 {i}/{n}…",
         "import_done": "已插入 {n} 页（来源：{src}）",
         "import_failed": "插入页处理失败：{exc}",
-        "import_missing": "插入页 {label} 的来源不可用，已保留占位页（可在整理窗口删除）：{exc}",
+        "import_missing": "{label}的来源不可用，已保留占位页（可在整理窗口删除）：{exc}",
         "import_page_label": "插入页 {n}",
         "import_src_image": "{n} 张图片",
         "import_src_blank": "空白页",
@@ -262,24 +262,24 @@ STRINGS = {
         "job_failed": "处理失败，详见左侧日志。",
         "ocr_fail": "OCR 失败：\n{exc}",
         "ocr_empty": "（没有识别到文字）",
-        "ocr_page_title": "第 {page} 页 OCR",
+        "ocr_page_title": "{label} OCR",
         "read_pages_fail": "无法读取 PDF 页数：\n{exc}",
         "reanalyze_fail": "重新分析失败：\n{exc}",
         "preview_fail": "预览失败：{exc}",
-        "open_page_fail": "无法打开第 {page} 页图像：{exc}",
+        "open_page_fail": "无法打开{label}的图像：{exc}",
         "opened": "已打开 {name}，共 {pages} 页。可先看预览，再点分析。",
         "opened_log": "打开 {src} ，{pages} 页",
         "pages_total": "共 {pages} 页",
         "crop_unanalyzed": "裁切框：尚未分析",
         "preview_note": "这是原 PDF 预览。点“分析预览”后可拖动蓝色框调整裁切。",
         "crop_fmt": "裁切框：{l}, {t}, {r}, {b}  （{w}×{h}）",
-        "page_note": "第 {page} 页 · {note}",
-        "page_analyzed": "第 {page} 页 / 已分析 {n} 页",
-        "rotating": "第 {page} 页旋转 {angle:+.1f}°，正在重算裁切…",
-        "rotated": "第 {page} 页已旋转 {angle:+.1f}°",
-        "rotated_log": "第 {page} 页旋转 {angle:+.1f}° · {note}",
+        "page_note": "{label} · {note}",
+        "page_analyzed": "{label} / 共 {n} 页",
+        "rotating": "{label}旋转 {angle:+.1f}°，正在重算裁切…",
+        "rotated": "{label}已旋转 {angle:+.1f}°",
+        "rotated_log": "{label}旋转 {angle:+.1f}° · {note}",
         "used_ref": "已用对照文本 {name} 辅助识别",
-        "ocr_page_done": "第 {page} 页 OCR 完成，{n} 字",
+        "ocr_page_done": "{label} OCR 完成，{n} 字",
         "ocr_book_ref": "OCR 全书将对照 {name}",
         "ocr_existing_ref": "给已有 PDF 写入文字层，对照 {name}",
         "ocr_existing": "给已有 PDF 写入文字层：{name}",
@@ -308,9 +308,9 @@ STRINGS = {
         "forget_edits_confirm": "清除本书保存的全部手工裁切和旋转？\n清除后需要重新点「分析预览」。",
         "edits_forgotten": "已清除本书保存的手工调整，请重新分析",
         "edits_found": "找到上次保存的手工调整：{crops} 页裁切、{rotates} 页旋转，分析时会自动套用",
-        "reset_done": "第 {page} 页已恢复自动裁切",
-        "resetting": "第 {page} 页正在重新自动裁切…",
-        "ocr_page_running": "正在 OCR 第 {page} 页…",
+        "reset_done": "{label}已恢复自动裁切",
+        "resetting": "{label}正在重新自动裁切…",
+        "ocr_page_running": "正在 OCR {label}…",
     },
     "en": {
         "app_title": "PDF Scan Crop",
@@ -353,7 +353,7 @@ STRINGS = {
         "reset_page": "Reset this page to auto crop",
         "keep_full_page": "Keep this page full",
         "keep_full_all": "Keep all pages full",
-        "kept_full_page": "Page {page} now keeps the full page",
+        "kept_full_page": "{label} now keeps the full page",
         "kept_full_all": "Set {n} pages to keep the full page; export will not crop them",
         "need_analyze_keep": "Analyze the book first, then keep pages uncropped.",
         "uniform_btn": "Uniform margins…",
@@ -379,7 +379,7 @@ STRINGS = {
         "rotate_all_done_no_plans": "All pages rotated {dir}. Click Analyze to check, or Export PDF directly.",
         "organize_btn": "Organize pages…",
         "organize_title": "Organize pages",
-        "organize_hint": "No analysis needed first; page numbers are the arranged ones and inserted pages behave exactly like source pages. Thumbnails flow several per row - drag pages straight to a new spot (Ctrl/Shift to drag a block); for long books use Move to page N or Full screen. Delete moves source pages out of the export (Restore puts them back at the end); deleting an inserted page removes it entirely. Unanalyzed pages are processed automatically at export time; the order only affects the exported PDF and source files are never touched.",
+        "organize_hint": "No analysis needed first; page numbers are the arranged ones and inserted pages behave exactly like source pages. Ctrl + wheel zooms the thumbnails; drag pages straight to a new spot (Ctrl/Shift to drag a block); inserting a page applies immediately and closes this window; for long books use Move to page N or Full screen. Delete moves source pages out of the export (Restore puts them back at the end); deleting an inserted page removes it entirely. Unanalyzed pages are processed automatically at export time; the order only affects the exported PDF and source files are never touched.",
         "organize_deleted_label": "Deleted pages (restorable):",
         "org_move_up": "Move up",
         "org_move_down": "Move down",
@@ -407,7 +407,7 @@ STRINGS = {
         "ins_progress": "Processing inserted page {i}/{n}…",
         "import_done": "Inserted {n} page(s) (source: {src})",
         "import_failed": "Failed to process inserted pages: {exc}",
-        "import_missing": "Source for inserted page {label} is unavailable; kept a placeholder page (delete it from the organizer): {exc}",
+        "import_missing": "Source for {label} is unavailable; kept a placeholder page (delete it from the organizer): {exc}",
         "import_page_label": "Inserted {n}",
         "import_src_image": "{n} image(s)",
         "import_src_blank": "blank page",
@@ -497,24 +497,24 @@ STRINGS = {
         "job_failed": "The job failed. See the log on the left.",
         "ocr_fail": "OCR failed:\n{exc}",
         "ocr_empty": "(no text recognized)",
-        "ocr_page_title": "Page {page} OCR",
+        "ocr_page_title": "{label} OCR",
         "read_pages_fail": "Could not read the PDF page count:\n{exc}",
         "reanalyze_fail": "Could not re-analyze this page:\n{exc}",
         "preview_fail": "Preview failed: {exc}",
-        "open_page_fail": "Could not open page {page}: {exc}",
+        "open_page_fail": "Could not open {label}: {exc}",
         "opened": "Opened {name}, {pages} pages. Preview first, then analyze.",
         "opened_log": "Opened {src} , {pages} pages",
         "pages_total": "{pages} pages",
         "crop_unanalyzed": "Crop box: not analyzed yet",
         "preview_note": "This is the original PDF. Click Analyze / preview, then drag the blue box.",
         "crop_fmt": "Crop: {l}, {t}, {r}, {b}  ({w}×{h})",
-        "page_note": "Page {page} · {note}",
-        "page_analyzed": "Page {page} / {n} analyzed",
-        "rotating": "Page {page} rotated {angle:+.1f}°, recomputing crop…",
-        "rotated": "Page {page} rotated {angle:+.1f}°",
-        "rotated_log": "Page {page} rotated {angle:+.1f}° · {note}",
+        "page_note": "{label} · {note}",
+        "page_analyzed": "{label} / {n} in the export",
+        "rotating": "{label} rotated {angle:+.1f}°, recomputing crop…",
+        "rotated": "{label} rotated {angle:+.1f}°",
+        "rotated_log": "{label} rotated {angle:+.1f}° · {note}",
         "used_ref": "Using companion text {name} for OCR",
-        "ocr_page_done": "Page {page} OCR done, {n} characters",
+        "ocr_page_done": "{label} OCR done, {n} characters",
         "ocr_book_ref": "OCR book will use {name}",
         "ocr_existing_ref": "Adding a text layer to the existing PDF, using {name}",
         "ocr_existing": "Adding a text layer to {name}",
@@ -543,9 +543,9 @@ STRINGS = {
         "forget_edits_confirm": "Forget all saved manual crops and rotations for this book?\nYou will need to click Analyze / preview again.",
         "edits_forgotten": "Forgot this book's saved manual edits; analyze again",
         "edits_found": "Found saved manual edits: {crops} crops, {rotates} rotations; they are applied on analysis",
-        "reset_done": "Page {page} is back to the automatic crop",
-        "resetting": "Re-running the automatic crop for page {page}…",
-        "ocr_page_running": "Running OCR on page {page}…",
+        "reset_done": "{label} is back to the automatic crop",
+        "resetting": "Re-running the automatic crop for {label}…",
+        "ocr_page_running": "Running OCR on {label}…",
     },
 }
 
@@ -1578,6 +1578,7 @@ class PageOrganizeDialog(QDialog):
         if not pages:
             return
         self._requests.append({"type": "pdf", "path": path, "pages": pages, "index": self._insert_index()})
+        self.accept()  # the insert runs right away, no extra OK needed
 
     def _insert_image(self) -> None:
         files, _ = QFileDialog.getOpenFileNames(self, self._tr("ins_image_title"), "", self._tr("ins_image_filter"))
@@ -1593,9 +1594,11 @@ class PageOrganizeDialog(QDialog):
         box.setDefaultButton(QMessageBox.StandardButton.Yes)
         enhanced = box.exec() == QMessageBox.StandardButton.Yes and check.isChecked()
         self._requests.append({"type": "image", "files": list(files), "enhanced": enhanced, "index": self._insert_index()})
+        self.accept()  # the insert runs right away, no extra OK needed
 
     def _insert_blank(self) -> None:
         self._requests.append({"type": "blank", "index": self._insert_index()})
+        self.accept()  # the insert runs right away, no extra OK needed
 
     def _duplicate(self) -> None:
         row = self.list.currentRow()
@@ -1603,6 +1606,7 @@ class PageOrganizeDialog(QDialog):
             return
         key = int(self.list.item(row).data(Qt.ItemDataRole.UserRole))
         self._requests.append({"type": "dup", "key": key, "index": row + 1})
+        self.accept()  # the insert runs right away, no extra OK needed
 
     def result(self) -> tuple[list[int], list[int], list[dict], list[int]]:
         order = [int(self.list.item(i).data(Qt.ItemDataRole.UserRole)) for i in range(self.list.count())]
@@ -1818,6 +1822,10 @@ class PdfCropWindow(QMainWindow):
         table = STRINGS.get(self.lang) or STRINGS["zh"]
         text = table.get(key) or STRINGS["zh"].get(key, key)
         if kwargs:
+            # Page messages embed a ready-made label like the arranged page
+            # number; accept the older page= wording too so nothing double-wraps.
+            if "label" in text and "label" not in kwargs and "page" in kwargs:
+                kwargs["label"] = kwargs["page"]
             return text.format(**kwargs)
         return text
 
@@ -2825,7 +2833,7 @@ class PdfCropWindow(QMainWindow):
             if plan.source_path != plan.path and plan.source_path.exists():
                 original_pix = self._preview_pixmap(plan.source_path)
         except Exception as exc:
-            self.append_log(self.t("open_page_fail", page=page, exc=exc))
+            self.append_log(self.t("open_page_fail", label=self._page_label(page), exc=exc))
             return
         self.current_page = self._pos_of(page) or self.current_page
         self.page_spin.blockSignals(True)
@@ -2854,8 +2862,8 @@ class PdfCropWindow(QMainWindow):
                 h=plan.height,
             )
         )
-        self.note_label.setText(self.t("page_note", page=self._page_label(page), note=plan.note))
-        self.page_info.setText(self.t("page_analyzed", page=self._page_label(page), n=len(self.plans)))
+        self.note_label.setText(self.t("page_note", label=self._page_label(page), note=plan.note))
+        self.page_info.setText(self.t("page_analyzed", label=self._page_label(page), n=len(self.page_list)))
         if hasattr(self, "fs_page_info"):
             self.fs_page_info.setText(self.page_info.text())
 
@@ -2900,7 +2908,7 @@ class PdfCropWindow(QMainWindow):
         self.crop_label.setText(
             self.t("crop_fmt", l=box[0], t=box[1], r=box[2], b=box[3], w=plan.width, h=plan.height)
         )
-        self.note_label.setText(self.t("page_note", page=self._page_label(plan.page), note=plan.note))
+        self.note_label.setText(self.t("page_note", label=self._page_label(plan.page), note=plan.note))
         self._update_table_row(plan.page)
         self._save_edits()
 
