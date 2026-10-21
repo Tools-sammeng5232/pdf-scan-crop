@@ -193,6 +193,7 @@ STRINGS = {
         "pages_filter_empty": "页码范围里没有可用的页",
         "pages_filter_range": "页码超出范围（共 {n} 页）",
         "organize_fullscreen": "全屏",
+        "insert_removed": "已移除 {n} 个插入页（记录与图片已清除）",
         "select_pages_btn": "按缩略图选页…",
         "select_pages_title": "选择要导出的页",
         "select_pages_hint": "点缩略图勾选 / 取消勾选，只导出勾选的页；页码就是整理后的页码，插入页同样可选。",
@@ -421,6 +422,7 @@ STRINGS = {
         "pages_filter_empty": "The page range matches no page",
         "pages_filter_range": "Page number out of range ({n} pages)",
         "organize_fullscreen": "Full screen",
+        "insert_removed": "Removed {n} inserted page(s) (records and images cleared)",
         "select_pages_btn": "Pick pages...",
         "select_pages_title": "Choose pages to export",
         "select_pages_hint": "Tick the thumbnails to keep in the export; numbers follow the arrangement and inserted pages work the same way.",
@@ -1238,6 +1240,7 @@ class PageOrganizeDialog(QDialog):
         self._tr = tr
         self._thumbs = thumbs or {}
         self._requests: list[dict] = []
+        self._dropped: list[int] = []
         self.setWindowTitle(tr("organize_title"))
         self.resize(1080, 760)
         layout = QVBoxLayout(self)
@@ -1301,6 +1304,8 @@ class PageOrganizeDialog(QDialog):
         self.deleted_list = QListWidget()
         self._make_grid(self.deleted_list, QSize(64, 86), QSize(88, 118))
         self.deleted_list.setDragEnabled(False)
+        self.deleted_list.setAcceptDrops(False)
+        self.deleted_list.setDragDropMode(QAbstractItemView.DragDropMode.NoDragDrop)
         self.deleted_list.setMaximumHeight(140)
         has_deleted = bool(deleted)
         self.deleted_label.setVisible(has_deleted)
@@ -1412,6 +1417,10 @@ class PageOrganizeDialog(QDialog):
                 self.deleted_list.addItem(item)
                 self.deleted_label.setVisible(True)
                 self.deleted_list.setVisible(True)
+            else:
+                # Inserted pages cannot be restored, so deleting one removes it
+                # for good - record the intent explicitly.
+                self._dropped.append(key)
         self._renumber()
 
     def _restore_selected(self) -> None:
@@ -1507,10 +1516,10 @@ class PageOrganizeDialog(QDialog):
         key = int(self.list.item(row).data(Qt.ItemDataRole.UserRole))
         self._requests.append({"type": "dup", "key": key, "index": row + 1})
 
-    def result(self) -> tuple[list[int], list[int], list[dict]]:
+    def result(self) -> tuple[list[int], list[int], list[dict], list[int]]:
         order = [int(self.list.item(i).data(Qt.ItemDataRole.UserRole)) for i in range(self.list.count())]
         deleted = [int(self.deleted_list.item(i).data(Qt.ItemDataRole.UserRole)) for i in range(self.deleted_list.count())]
-        return order, deleted, self._requests
+        return order, deleted, self._requests, list(self._dropped)
 
 
 class PageSelectDialog(QDialog):
@@ -3265,8 +3274,8 @@ class PdfCropWindow(QMainWindow):
         dialog = PageOrganizeDialog(self, entries, deleted, self.t, thumbs)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        order, deleted_now, requests = dialog.result()
-        self._apply_order(order, deleted_now)
+        order, deleted_now, requests, dropped = dialog.result()
+        self._apply_order(order, deleted_now, dropped)
         for request in requests:
             self._start_insert_request(request)
 
@@ -3313,7 +3322,9 @@ class PdfCropWindow(QMainWindow):
         else:
             self.goto_page(max(1, min(fallback or self.current_page, len(self.page_list))))
 
-    def _apply_order(self, order: list[int], deleted: list[int]) -> None:
+    def _apply_order(
+        self, order: list[int], deleted: list[int], dropped: list[int] | None = None
+    ) -> None:
         shown = self._current_key()
         # The incoming order may bring deleted pages back (restore) and drop
         # others (delete), so validate against every page that can exist -
@@ -3321,11 +3332,19 @@ class PdfCropWindow(QMainWindow):
         universe = self._source_page_keys() | set(self.plans) | set(self._imports)
         self._page_order = [key for key in order if key in universe]
         self._deleted = {key for key in deleted if key < crop.IMPORT_PAGE_BASE}
-        ordered_set = set(self._page_order)
-        for key in [key for key in self._imports if key not in ordered_set and key not in self._deleted]:
-            # Imports the user removed from the list are dropped entirely.
+        # Only pages the user explicitly deleted disappear. An inserted page that
+        # merely fell out of the handed-in order stays, appended at the end -
+        # losing a page because the dialog missed it would be far worse.
+        for key in dict.fromkeys(list(dropped or []) + [k for k in deleted if k >= crop.IMPORT_PAGE_BASE]):
             self._imports.pop(key, None)
             self.plans.pop(key, None)
+        ordered_now = set(self._page_order)
+        for key in sorted(self._imports):
+            if key not in ordered_now:
+                self._page_order.append(key)
+                ordered_now.add(key)
+        if dropped or any(k >= crop.IMPORT_PAGE_BASE for k in deleted):
+            self.append_log(self.t("insert_removed", n=len(dropped or [])))
         self.page_list = self._ordered_keys()
         self._sync_page_spin_range()
         self._refresh_table()
@@ -4565,7 +4584,28 @@ def run_self_test(report: Path) -> int:
     return 0 if passed else 1
 
 
+def _install_crash_log() -> None:
+    """Uncaught exceptions in slots are invisible in a windowed build."""
+
+    def hook(exc_type, exc, tb) -> None:
+        text = "".join(traceback.format_exception(exc_type, exc, tb))
+        try:
+            path = crop.app_data_dir("运行日志.log")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(f"[{stamp}] 未捕获异常：")
+                handle.write(text)
+                handle.write("")
+        except Exception:
+            pass
+        sys.__excepthook__(exc_type, exc, tb)
+
+    sys.excepthook = hook
+
+
 def main() -> int:
+    _install_crash_log()
     if str(app_dir()) not in sys.path:
         sys.path.insert(0, str(app_dir()))
     args = sys.argv[1:]
