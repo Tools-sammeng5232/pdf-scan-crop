@@ -14,7 +14,19 @@ from dataclasses import replace
 from pathlib import Path
 
 from PIL import Image
-from PySide6.QtCore import QEvent, QLibraryInfo, QPoint, QRect, QSettings, QSize, Qt, QTimer, QTranslator
+from PySide6.QtCore import (
+    QEvent,
+    QItemSelectionModel,
+    QLibraryInfo,
+    QPoint,
+    QRect,
+    QSettings,
+    QSize,
+    Qt,
+    QTimer,
+    QTranslator,
+    Signal,
+)
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QIcon, QImage, QPainter, QPalette, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -131,7 +143,7 @@ STRINGS = {
         "rotate_all_done_no_plans": "全书已{dir}。点「分析预览」检查，或直接点「生成 PDF」。",
         "organize_btn": "页面整理（排序 / 删页 / 插页）…",
         "organize_title": "页面整理",
-        "organize_hint": "不必先「分析预览」即可整理，页码就是整理后的页码（插入页与原有页完全等价）。缩略图一行多页，可拖动排序或点「全屏」放大；「删除所选」把源页面移出输出（可用「恢复所选」放回末尾），删除插入页则是整个移除。未分析的页面在生成时会自动补算，顺序只影响生成的 PDF，不会改动源文件。",
+        "organize_hint": "不必先「分析预览」即可整理，页码就是整理后的页码（插入页与原有页完全等价）。缩略图一行多页，直接拖动即可移动页面（按住 Ctrl / Shift 可多选后一起拖）；几百页的书可用「移到第 N 页」一步跳转，或点「全屏」放大。删除所选把源页面移出输出（可用「恢复所选」放回末尾），删除插入页则是整个移除。未分析的页面在生成时会自动补算，顺序只影响生成的 PDF，不会改动源文件。",
         "organize_deleted_label": "已删除的页（可恢复）：",
         "org_move_up": "上移 ↑",
         "org_move_down": "下移 ↓",
@@ -177,6 +189,8 @@ STRINGS = {
         "pages_filter_empty": "页码范围里没有可用的页",
         "pages_filter_range": "页码超出范围（共 {n} 页）",
         "organize_fullscreen": "全屏",
+        "org_move_to": "移到第",
+        "org_move_apply": "移动",
         "organize_windowed": "退出全屏",
         "ctx_move_up": "上移",
         "ctx_move_down": "下移",
@@ -345,7 +359,7 @@ STRINGS = {
         "rotate_all_done_no_plans": "All pages rotated {dir}. Click Analyze to check, or Export PDF directly.",
         "organize_btn": "Organize pages…",
         "organize_title": "Organize pages",
-        "organize_hint": "No analysis needed first; page numbers are the arranged ones and inserted pages behave exactly like source pages. Thumbnails flow several per row - drag to reorder or press Full screen. Delete moves source pages out of the export (Restore puts them back at the end); deleting an inserted page removes it entirely. Unanalyzed pages are processed automatically at export time; the order only affects the exported PDF and source files are never touched.",
+        "organize_hint": "No analysis needed first; page numbers are the arranged ones and inserted pages behave exactly like source pages. Thumbnails flow several per row - drag pages straight to a new spot (Ctrl/Shift to drag a block); for long books use Move to page N or Full screen. Delete moves source pages out of the export (Restore puts them back at the end); deleting an inserted page removes it entirely. Unanalyzed pages are processed automatically at export time; the order only affects the exported PDF and source files are never touched.",
         "organize_deleted_label": "Deleted pages (restorable):",
         "org_move_up": "Move up",
         "org_move_down": "Move down",
@@ -391,6 +405,8 @@ STRINGS = {
         "pages_filter_empty": "The page range matches no page",
         "pages_filter_range": "Page number out of range ({n} pages)",
         "organize_fullscreen": "Full screen",
+        "org_move_to": "Move to",
+        "org_move_apply": "Move",
         "organize_windowed": "Exit full screen",
         "ctx_move_up": "Move up",
         "ctx_move_down": "Move down",
@@ -947,15 +963,15 @@ class ResultsTable(QTableWidget):
             return
         pos = event.position().toPoint()
         target = self.rowAt(pos.y())
-        source = self.currentRow()
         if target < 0:
-            target = self.rowCount() - 1
-        if source < 0 or source == target or source >= self.rowCount():
+            target = self.rowCount()
+        rows = sorted({index.row() for index in self.selectionModel().selectedRows()})
+        if not rows:
             event.ignore()
             return
         event.acceptProposedAction()
         event.setDropAction(Qt.DropAction.IgnoreAction)
-        self._reorder_handler(source, target)
+        self._reorder_handler(rows, target)
 
 
 class UniformCropDialog(QDialog):
@@ -1083,6 +1099,105 @@ class UniformCropDialog(QDialog):
         return self._unit()
 
 
+class PageGrid(QListWidget):
+    """Thumbnail grid with reliable drag reordering (multi-selection aware)."""
+
+    moved = Signal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setViewMode(QListView.ViewMode.IconMode)
+        self.setFlow(QListView.Flow.LeftToRight)
+        self.setWrapping(True)
+        self.setResizeMode(QListView.ResizeMode.Adjust)
+        self.setMovement(QListView.Movement.Static)
+        self.setUniformItemSizes(True)
+        self.setWordWrap(True)
+        self.setSpacing(2)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.viewport().setAcceptDrops(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self.setDropIndicatorShown(True)
+        self.setDragDropOverwriteMode(False)
+
+    def selected_rows(self) -> list[int]:
+        return sorted({self.row(item) for item in self.selectedItems()})
+
+    def move_rows(self, rows: list[int], target: int) -> None:
+        """Move the given rows together so the block starts at target row."""
+        rows = [row for row in sorted(set(rows)) if 0 <= row < self.count()]
+        if not rows:
+            return
+        target = max(0, min(self.count(), target))
+        before = sum(1 for row in rows if row < target)
+        insert_at = target - before
+        if before == len(rows) and insert_at == rows[0]:
+            return  # dropping onto itself changes nothing
+        items = []
+        for row in reversed(rows):
+            items.append(self.takeItem(row))
+        items.reverse()
+        for offset, item in enumerate(items):
+            self.insertItem(insert_at + offset, item)
+        self.clearSelection()
+        for offset in range(len(items)):
+            self.item(insert_at + offset).setSelected(True)
+        self.setCurrentRow(insert_at)
+        self.scrollToItem(self.item(insert_at), QAbstractItemView.ScrollHint.EnsureVisible)
+        self.moved.emit()
+
+    def move_to_position(self, rows: list[int], dest: int) -> None:
+        """Move rows so the block starts exactly at 0-based dest."""
+        rows = [row for row in sorted(set(rows)) if 0 <= row < self.count()]
+        if not rows:
+            return
+        dest = max(0, min(self.count() - len(rows), dest))
+        offset = sum(1 for row in rows if row < dest)
+        self.move_rows(rows, dest + offset)
+
+    def row_near(self, pos: QPoint) -> int:
+        """Row under the pointer, falling back to the nearest cell (gaps included)."""
+        index = self.indexAt(pos)
+        if index.isValid():
+            return index.row()
+        best, best_dist = -1, None
+        for row in range(self.count()):
+            rect = self.visualRect(self.model().index(row, 0))
+            if rect.width() <= 0 and rect.height() <= 0:
+                continue
+            dx = max(rect.left() - pos.x(), 0, pos.x() - (rect.right() + 1))
+            dy = max(rect.top() - pos.y(), 0, pos.y() - (rect.bottom() + 1))
+            dist = dx * dx + dy * dy
+            if best_dist is None or dist < best_dist:
+                best, best_dist = row, dist
+        return best
+
+    def dropEvent(self, event) -> None:
+        if event.source() is not self:
+            event.ignore()
+            return
+        rows = self.selected_rows()
+        if not rows:
+            event.ignore()
+            return
+        pos = event.position().toPoint()
+        row = self.row_near(pos)
+        if row >= 0:
+            rect = self.visualRect(self.model().index(row, 0))
+            target = row
+            # Dropping past the middle of a thumbnail means "after this page".
+            if rect.width() > 0 and pos.x() > rect.center().x():
+                target += 1
+        else:
+            target = self.count()
+        event.accept()
+        event.setDropAction(Qt.DropAction.MoveAction)
+        self.move_rows(rows, target)
+
+
 class PageOrganizeDialog(QDialog):
     """Reorder, delete, restore and insert pages; returns the arrangement on accept."""
 
@@ -1104,12 +1219,14 @@ class PageOrganizeDialog(QDialog):
         hint = QLabel(tr("organize_hint"))
         hint.setWordWrap(True)
         layout.addWidget(hint)
-        self.list = QListWidget()
-        self._make_grid(self.list, QSize(132, 176), QSize(156, 210))
+        self.list = PageGrid()
+        self.list.setIconSize(QSize(132, 176))
+        self.list.setGridSize(QSize(156, 210))
         for key, note in entries:
             self.list.addItem(self._make_item(key, note))
         self.list.model().rowsInserted.connect(lambda *args: QTimer.singleShot(0, self._renumber))
         self.list.model().rowsRemoved.connect(lambda *args: QTimer.singleShot(0, self._renumber))
+        self.list.moved.connect(self._renumber)
         layout.addWidget(self.list, 1)
         row1 = QHBoxLayout()
         for text, handler in (
@@ -1121,6 +1238,15 @@ class PageOrganizeDialog(QDialog):
             button = QPushButton(text)
             button.clicked.connect(handler)
             row1.addWidget(button)
+        row1.addSpacing(12)
+        row1.addWidget(QLabel(tr("org_move_to")))
+        self.move_to_spin = QSpinBox()
+        self.move_to_spin.setRange(1, max(1, self.list.count()))
+        self.move_to_spin.setMinimumWidth(70)
+        row1.addWidget(self.move_to_spin)
+        self.move_to_btn = QPushButton(tr("org_move_apply"))
+        self.move_to_btn.clicked.connect(self._move_to)
+        row1.addWidget(self.move_to_btn)
         self.fullscreen_btn = QPushButton(tr("organize_fullscreen"))
         self.fullscreen_btn.clicked.connect(self._toggle_fullscreen)
         row1.addStretch(1)
@@ -1149,6 +1275,7 @@ class PageOrganizeDialog(QDialog):
         self.deleted_label = QLabel(tr("organize_deleted_label"))
         self.deleted_list = QListWidget()
         self._make_grid(self.deleted_list, QSize(64, 86), QSize(88, 118))
+        self.deleted_list.setDragEnabled(False)
         self.deleted_list.setMaximumHeight(140)
         has_deleted = bool(deleted)
         self.deleted_label.setVisible(has_deleted)
@@ -1197,6 +1324,8 @@ class PageOrganizeDialog(QDialog):
             note = item.data(Qt.ItemDataRole.UserRole + 1) or ""
             text = self._tr("page_label", page=row + 1)
             item.setText(f"{text} · {note}" if note else text)
+        if hasattr(self, "move_to_spin"):
+            self.move_to_spin.setRange(1, max(1, self.list.count()))
         for row in range(self.deleted_list.count()):
             item = self.deleted_list.item(row)
             key = int(item.data(Qt.ItemDataRole.UserRole))
@@ -1225,22 +1354,29 @@ class PageOrganizeDialog(QDialog):
         row = self.list.currentRow()
         return row + 1 if row >= 0 else self.list.count()
 
+    def _move_to(self) -> None:
+        """Send the selection (or the current page) straight to a page number."""
+        rows = self.list.selected_rows()
+        if not rows:
+            row = self.list.currentRow()
+            if row < 0:
+                return
+            rows = [row]
+        self.list.move_to_position(rows, self.move_to_spin.value() - 1)
+        self._renumber()
+
     def _move_up(self) -> None:
-        row = self.list.currentRow()
-        if row <= 0:
+        rows = self.list.selected_rows() or ([self.list.currentRow()] if self.list.currentRow() >= 0 else [])
+        if not rows or rows[0] <= 0:
             return
-        item = self.list.takeItem(row)
-        self.list.insertItem(row - 1, item)
-        self.list.setCurrentRow(row - 1)
+        self.list.move_rows(rows, rows[0] - 1)
         self._renumber()
 
     def _move_down(self) -> None:
-        row = self.list.currentRow()
-        if row < 0 or row >= self.list.count() - 1:
+        rows = self.list.selected_rows() or ([self.list.currentRow()] if self.list.currentRow() >= 0 else [])
+        if not rows or rows[-1] >= self.list.count() - 1:
             return
-        item = self.list.takeItem(row)
-        self.list.insertItem(row + 1, item)
-        self.list.setCurrentRow(row + 1)
+        self.list.move_rows(rows, rows[-1] + 2)
         self._renumber()
 
     def _delete_selected(self) -> None:
@@ -1766,7 +1902,7 @@ class PdfCropWindow(QMainWindow):
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
@@ -3016,16 +3152,34 @@ class PdfCropWindow(QMainWindow):
         if self.page_list:
             self.goto_page(min(self.current_page, len(self.page_list)))
 
-    def _on_table_reorder(self, source_row: int, target_row: int) -> None:
+    def _on_table_reorder(self, rows: list[int], target: int) -> None:
+        """Rows dragged in the results table land as one block before target."""
         keys = self._ordered_keys()
-        if source_row == target_row or not 0 <= source_row < len(keys) or not 0 <= target_row < len(keys):
+        rows = [row for row in sorted(set(rows)) if 0 <= row < len(keys)]
+        if not rows:
             return
-        key = keys.pop(source_row)
-        keys.insert(target_row, key)
+        target = max(0, min(len(keys), target))
+        before = sum(1 for row in rows if row < target)
+        insert_at = target - before
+        if before == len(rows) and insert_at == rows[0]:
+            return
+        block = [keys[row] for row in rows]
+        for row in reversed(rows):
+            keys.pop(row)
+        for offset, key in enumerate(block):
+            keys.insert(insert_at + offset, key)
         self._page_order = keys
         self.page_list = list(keys)
         self._refresh_table()
-        self.table.selectRow(target_row)
+        # setCurrentCell clears the selection, so move the cursor first and
+        # then select the whole dragged block.
+        self.table.setCurrentCell(insert_at, 0)
+        self.table.clearSelection()
+        flags = (
+            QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows
+        )
+        for offset in range(len(block)):
+            self.table.selectionModel().select(self.table.model().index(insert_at + offset, 0), flags)
         self._save_edits()
         self.status.setText(self.t("pages_reordered", n=len(keys)))
 
@@ -4132,6 +4286,16 @@ def run_self_test(report: Path) -> int:
             assert window.current_page == 4, window.current_page
             window._delete_pages([crop.IMPORT_PAGE_BASE + 1])
             assert window.page_list == [1, 2, 3], window.page_list
+            # Drag reordering: a moved block lands exactly where it was dropped.
+            grid = PageGrid()
+            for key in (1, 2, 3):
+                grid.addItem(QListWidgetItem(str(key)))
+            grid.move_to_position([2], 0)
+            order_now = [grid.item(i).text() for i in range(grid.count())]
+            assert order_now == ["3", "1", "2"], order_now
+            grid.move_rows([0, 1], 3)
+            order_now = [grid.item(i).text() for i in range(grid.count())]
+            assert order_now == ["2", "3", "1"], order_now
             return f"list={window.page_list} thumbs={len(thumbs)} spin_max={window.page_spin.maximum()}"
 
         step("sample PDF", make_sample)
