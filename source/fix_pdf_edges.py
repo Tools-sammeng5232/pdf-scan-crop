@@ -3117,6 +3117,23 @@ def parse_page_spec(spec: str) -> list[int]:
     return sorted(p for p in pages if p > 0)
 
 
+def spec_from_positions(positions) -> str:
+    """Compress page numbers into the usual '1-3,7,10-12' form."""
+    numbers = sorted({int(pos) for pos in positions if int(pos) > 0})
+    if not numbers:
+        return ""
+    parts: list[str] = []
+    start = prev = numbers[0]
+    for number in numbers[1:]:
+        if number == prev + 1:
+            prev = number
+            continue
+        parts.append(str(start) if start == prev else f"{start}-{prev}")
+        start = prev = number
+    parts.append(str(start) if start == prev else f"{start}-{prev}")
+    return ",".join(parts)
+
+
 def validate_pages_in_pdf(pages: list[int], page_total: int, option_name: str) -> None:
     invalid = [page for page in pages if page > page_total]
     if invalid:

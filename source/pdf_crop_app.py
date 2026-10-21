@@ -8,6 +8,7 @@ import queue
 import re
 import sys
 import threading
+import time
 import traceback
 import webbrowser
 from dataclasses import replace
@@ -168,7 +169,7 @@ STRINGS = {
         "ins_progress": "正在处理插入页 {i}/{n}…",
         "import_done": "已插入 {n} 页（来源：{src}）",
         "import_failed": "插入页处理失败：{exc}",
-        "import_missing": "插入页 {label} 来源不可用，已跳过：{exc}",
+        "import_missing": "插入页 {label} 的来源不可用，已保留占位页（可在整理窗口删除）：{exc}",
         "import_page_label": "插入页 {n}",
         "import_src_image": "{n} 张图片",
         "import_src_blank": "空白页",
@@ -189,6 +190,15 @@ STRINGS = {
         "pages_filter_empty": "页码范围里没有可用的页",
         "pages_filter_range": "页码超出范围（共 {n} 页）",
         "organize_fullscreen": "全屏",
+        "select_pages_btn": "按缩略图选页…",
+        "select_pages_title": "选择要导出的页",
+        "select_pages_hint": "点缩略图勾选 / 取消勾选，只导出勾选的页；页码就是整理后的页码，插入页同样可选。",
+        "select_all": "全选",
+        "select_none": "全不选",
+        "select_invert": "反选",
+        "select_pages_count": "已选 {n} 页",
+        "select_pages_applied": "导出页已更新：共 {n} 页",
+        "import_orphans": "发现 {n} 个未登记的插入页图片（可能是上次插入未完成）：{names}",
         "org_move_to": "移到第",
         "org_move_apply": "移动",
         "organize_windowed": "退出全屏",
@@ -384,7 +394,7 @@ STRINGS = {
         "ins_progress": "Processing inserted page {i}/{n}…",
         "import_done": "Inserted {n} page(s) (source: {src})",
         "import_failed": "Failed to process inserted pages: {exc}",
-        "import_missing": "Source for inserted page {label} is unavailable, skipped: {exc}",
+        "import_missing": "Source for inserted page {label} is unavailable; kept a placeholder page (delete it from the organizer): {exc}",
         "import_page_label": "Inserted {n}",
         "import_src_image": "{n} image(s)",
         "import_src_blank": "blank page",
@@ -405,6 +415,15 @@ STRINGS = {
         "pages_filter_empty": "The page range matches no page",
         "pages_filter_range": "Page number out of range ({n} pages)",
         "organize_fullscreen": "Full screen",
+        "select_pages_btn": "Pick pages...",
+        "select_pages_title": "Choose pages to export",
+        "select_pages_hint": "Tick the thumbnails to keep in the export; numbers follow the arrangement and inserted pages work the same way.",
+        "select_all": "Select all",
+        "select_none": "Select none",
+        "select_invert": "Invert",
+        "select_pages_count": "{n} page(s) selected",
+        "select_pages_applied": "Export pages updated: {n}",
+        "import_orphans": "{n} unregistered inserted image(s) found (a previous insert may not have finished): {names}",
         "org_move_to": "Move to",
         "org_move_apply": "Move",
         "organize_windowed": "Exit full screen",
@@ -1470,6 +1489,91 @@ class PageOrganizeDialog(QDialog):
         return order, deleted, self._requests
 
 
+class PageSelectDialog(QDialog):
+    """Tick thumbnails to choose which pages the export keeps."""
+
+    def __init__(
+        self,
+        parent: QWidget,
+        keys: list[int],
+        selected: set[int],
+        tr,
+        thumbs: dict[int, QPixmap] | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._tr = tr
+        self._thumbs = thumbs or {}
+        self.setWindowTitle(tr("select_pages_title"))
+        self.resize(1000, 720)
+        layout = QVBoxLayout(self)
+        hint = QLabel(tr("select_pages_hint"))
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        self.list = PageGrid()
+        self.list.setDragEnabled(False)
+        self.list.setAcceptDrops(False)
+        self.list.setDragDropMode(QAbstractItemView.DragDropMode.NoDragDrop)
+        self.list.setIconSize(QSize(132, 176))
+        self.list.setGridSize(QSize(156, 210))
+        for position, key in enumerate(keys, start=1):
+            item = QListWidgetItem(tr("page_label", page=position))
+            item.setData(Qt.ItemDataRole.UserRole, position)
+            icon = self._thumbs.get(key)
+            if icon is not None:
+                item.setIcon(QIcon(icon))
+            item.setFlags(
+                Qt.ItemFlag.ItemIsEnabled
+                | Qt.ItemFlag.ItemIsSelectable
+                | Qt.ItemFlag.ItemIsUserCheckable
+            )
+            item.setCheckState(
+                Qt.CheckState.Checked if position in selected else Qt.CheckState.Unchecked
+            )
+            self.list.addItem(item)
+        layout.addWidget(self.list, 1)
+        row = QHBoxLayout()
+        for text, handler in (
+            (tr("select_all"), lambda: self._set_all(Qt.CheckState.Checked)),
+            (tr("select_none"), lambda: self._set_all(Qt.CheckState.Unchecked)),
+            (tr("select_invert"), self._invert),
+        ):
+            button = QPushButton(text)
+            button.clicked.connect(handler)
+            row.addWidget(button)
+        self.count_label = QLabel()
+        row.addStretch(1)
+        row.addWidget(self.count_label)
+        layout.addLayout(row)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self.list.itemChanged.connect(self._update_count)
+        self._update_count()
+
+    def _set_all(self, state) -> None:
+        for row in range(self.list.count()):
+            self.list.item(row).setCheckState(state)
+
+    def _invert(self) -> None:
+        for row in range(self.list.count()):
+            item = self.list.item(row)
+            checked = item.checkState() == Qt.CheckState.Checked
+            item.setCheckState(Qt.CheckState.Unchecked if checked else Qt.CheckState.Checked)
+
+    def _update_count(self, *_args) -> None:
+        self.count_label.setText(self._tr("select_pages_count", n=len(self.selected_positions())))
+
+    def selected_positions(self) -> list[int]:
+        return sorted(
+            int(self.list.item(row).data(Qt.ItemDataRole.UserRole))
+            for row in range(self.list.count())
+            if self.list.item(row).checkState() == Qt.CheckState.Checked
+        )
+
+
 class PdfCropWindow(QMainWindow):
     SETTING_BOXES = ("reuse_box", "open_after_box", "tight_box", "auto_rotate_box", "ocr_box", "ocr_txt_box")
 
@@ -1693,7 +1797,13 @@ class PdfCropWindow(QMainWindow):
         self.pages_only_label = QLabel()
         self.inspect_label = QLabel()
         layout.addWidget(self.pages_only_label)
-        layout.addWidget(self.pages_edit)
+        pages_row = QHBoxLayout()
+        pages_row.setSpacing(4)
+        pages_row.addWidget(self.pages_edit, 1)
+        self.pick_pages_btn = QPushButton()
+        self.pick_pages_btn.clicked.connect(self.open_pages_picker)
+        pages_row.addWidget(self.pick_pages_btn)
+        layout.addLayout(pages_row)
         layout.addWidget(self.inspect_label)
         layout.addWidget(self.inspect_edit)
 
@@ -2185,6 +2295,8 @@ class PdfCropWindow(QMainWindow):
         self.min_page[2].setText(self.t("min_page"))
         self.pages_section.setText(self.t("pages_section"))
         self.pages_only_label.setText(self.t("pages_only"))
+        if hasattr(self, "pick_pages_btn"):
+            self.pick_pages_btn.setText(self.t("select_pages_btn"))
         self.pages_edit.setPlaceholderText(self.t("pages_ph"))
         self.inspect_label.setText(self.t("inspect_pages"))
         self.inspect_edit.setPlaceholderText(self.t("inspect_ph"))
@@ -2278,7 +2390,22 @@ class PdfCropWindow(QMainWindow):
         return message
 
     def append_log(self, text: str) -> None:
-        self.log.appendPlainText(text.rstrip())
+        text = text.rstrip()
+        self.log.appendPlainText(text)
+        self._write_log_file(text)
+
+    def _write_log_file(self, text: str) -> None:
+        """Keep a rotating log next to the caches so failures stay diagnosable."""
+        try:
+            path = crop.app_data_dir("运行日志.log")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if path.is_file() and path.stat().st_size > 2 * 1024 * 1024:
+                path.replace(path.with_name(path.name + ".old"))
+            stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(f"[{stamp}] {text}\n")
+        except Exception:
+            pass
 
     def browse_input(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, self.t("pick_src"), self._last_dir, self.t("pdf_filter"))
@@ -2447,6 +2574,26 @@ class PdfCropWindow(QMainWindow):
             for pos in selected
             if 1 <= pos <= len(keys) and keys[pos - 1] < crop.IMPORT_PAGE_BASE
         }
+
+    def open_pages_picker(self) -> None:
+        if self.src is None:
+            QMessageBox.information(self, self.t("app_title"), self.t("need_src"))
+            return
+        if self.busy or self._rotate_busy:
+            return
+        keys = self._ordered_keys()
+        if not keys:
+            return
+        current = self._pages_filter()
+        if current is None:
+            current = set(range(1, len(keys) + 1))
+        dialog = PageSelectDialog(self, keys, current, self.t, self._thumb_pixmaps(keys))
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        chosen = dialog.selected_positions()
+        self.pages_edit.setText(crop.spec_from_positions(chosen))
+        self._pages_filter_changed()
+        self.status.setText(self.t("select_pages_applied", n=len(chosen)))
 
     def _pages_filter_changed(self) -> None:
         text = self.pages_edit.text().strip()
@@ -3410,6 +3557,13 @@ class PdfCropWindow(QMainWindow):
         self.worker.start()
 
     def _on_import_done(self, results: list, request: dict) -> None:
+        try:
+            self._apply_import_results(results, request)
+        except Exception:
+            self.append_log(traceback.format_exc())
+            QMessageBox.critical(self, self.t("app_title"), self.t("import_failed", exc="—"))
+
+    def _apply_import_results(self, results: list, request: dict) -> None:
         self._set_busy(False)
         for plan, entry in results:
             self.plans[plan.page] = plan
@@ -3489,8 +3643,40 @@ class PdfCropWindow(QMainWindow):
             try:
                 self.plans[key] = self._build_import_plan(key, self._imports[key])
             except Exception as exc:
-                self._imports.pop(key, None)
+                # Never drop the record: a locked or moved source must not wipe
+                # the user's inserted pages. Keep a visible placeholder instead.
                 self.append_log(self.t("import_missing", label=self._page_label(key), exc=exc))
+                self.append_log(traceback.format_exc())
+                self.plans[key] = self._missing_import_plan(key)
+        self._log_orphan_imports()
+
+    def _missing_import_plan(self, key: int) -> crop.PagePlan:
+        root = crop.imports_dir_for(self.src)
+        root.mkdir(parents=True, exist_ok=True)
+        base = root / f"import-{key}.jpg"
+        if not base.is_file():
+            Image.new("RGB", (1240, 1754), "white").save(base, format="JPEG", quality=90)
+        with Image.open(base) as im:
+            width, height = im.size
+        return crop.PagePlan(
+            page=key, path=base, source_path=base, width=width, height=height, mode="RGB",
+            crop=(0, 0, width, height), safe=(0, 0, width, height),
+            note="import+missing", rotate_deg=0.0,
+        )
+
+    def _log_orphan_imports(self) -> None:
+        if self.src is None:
+            return
+        root = crop.imports_dir_for(self.src)
+        if not root.is_dir():
+            return
+        known = {f"import-{key}.jpg" for key in self._imports}
+        orphans = sorted(
+            path.name for path in root.glob("import-*.jpg")
+            if path.name not in known and not path.stem.endswith("_rot")
+        )
+        if orphans:
+            self.append_log(self.t("import_orphans", n=len(orphans), names=", ".join(orphans[:6])))
 
     # ------------------------------------------------------------ merged export
 
