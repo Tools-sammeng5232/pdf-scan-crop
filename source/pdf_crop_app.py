@@ -1176,8 +1176,12 @@ class PageGrid(QListWidget):
             return  # dropping onto itself changes nothing
         items = []
         for row in reversed(rows):
-            items.append(self.takeItem(row))
+            item = self.takeItem(row)
+            if item is not None:
+                items.append(item)
         items.reverse()
+        if not items:
+            return
         for offset, item in enumerate(items):
             self.insertItem(insert_at + offset, item)
         self.clearSelection()
@@ -1232,7 +1236,10 @@ class PageGrid(QListWidget):
         else:
             target = self.count()
         event.accept()
-        event.setDropAction(Qt.DropAction.MoveAction)
+        # Never report MoveAction: QAbstractItemView::startDrag() answers a Move
+        # result by clearing the dragged rows itself, which made pages vanish on
+        # every drag. We move the rows ourselves a moment later.
+        event.setDropAction(Qt.DropAction.IgnoreAction)
         # Reordering inside dropEvent rebuilds items while Qt is still handling
         # the drag, which can crash. Let the drag finish first.
         QTimer.singleShot(0, lambda: self._deferred_move(rows, target))
