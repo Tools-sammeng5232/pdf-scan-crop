@@ -31,11 +31,9 @@ $App = Join-Path $Dist "PDF裁边"
 # OCR language data and the user guide ship beside the exe, plus the source it was built from.
 Copy-Item "$Project\PDF裁边使用说明.txt" "$App\使用说明.txt" -Force
 New-Item -ItemType Directory -Force "$App\tessdata\configs" | Out-Null
-# The repo keeps tessdata at its root, one level above this source folder.
-$Tessdata = if (Test-Path "$Project\tessdata") { "$Project\tessdata" } else { Join-Path (Split-Path -Parent $Project) "tessdata" }
-Copy-Item "$Tessdata\*.traineddata" "$App\tessdata\" -Force
-if (Test-Path "$Tessdata\configs") {
-    Copy-Item "$Tessdata\configs\*" "$App\tessdata\configs\" -Force
+Copy-Item "$Project\tessdata\*.traineddata" "$App\tessdata\" -Force
+if (Test-Path "$Project\tessdata\configs") {
+    Copy-Item "$Project\tessdata\configs\*" "$App\tessdata\configs\" -Force
 }
 New-Item -ItemType Directory -Force "$App\source" | Out-Null
 $Sources = "pdf_crop_app.py", "fix_pdf_edges.py", "PDF裁边.spec", "build_pdf_crop_exe.ps1",
@@ -46,8 +44,8 @@ foreach ($name in $Sources) {
 Write-Host "Built: $App\PDF裁边.exe"
 if ($NoDeploy) { return }
 
-# Mirror into the deployed folder, leaving its git repo, .claude folder, README and .gitignore alone.
-robocopy $App $Deploy /MIR /XD .git .claude /XF README.md .gitignore /NFL /NDL /NJH /NP | Out-Host
+# Mirror into the deployed folder, leaving its git repo, README and .gitignore alone.
+robocopy $App $Deploy /MIR /XD .git /XF README.md .gitignore /NFL /NDL /NJH /NP | Out-Host
 if ($LASTEXITCODE -ge 8) { throw "robocopy failed with exit code $LASTEXITCODE" }
 $global:LASTEXITCODE = 0
 Write-Host "Deployed: $Deploy\PDF裁边.exe"

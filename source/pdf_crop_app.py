@@ -139,9 +139,8 @@ STRINGS = {
         "rotate_all_cw": "全书右转 90°",
         "rotate_dir_ccw": "左转 90°",
         "rotate_dir_cw": "右转 90°",
-        "rotate_all_confirm": "把全书 {n} 页{dir}？\n\n已分析的页面会按新方向重新计算裁切框；手工拖过的裁切框不保留（旋转后坐标不再适用），统一裁边设置和每页旋转角度会保留累计。",
-        "rotate_all_done": "全书已{dir}，正在重新分析…",
-        "rotate_all_done_no_plans": "全书已{dir}。点「分析预览」检查，或直接点「生成 PDF」。",
+        "rotate_all_confirm": "把全书 {n} 页{dir}？\n\n旋转后已分析的页面回到未分析状态（裁切框不再适用）；需要裁边时再点「分析预览」，只想旋转可直接点「生成 PDF」选「不裁边直接生成」。统一裁边设置和每页旋转角度会保留累计。",
+        "rotate_all_done_no_plans": "全书已{dir}。点「分析预览」检查；或直接点「生成 PDF」，选「不裁边直接生成」只旋转不裁边。",
         "organize_btn": "页面整理（排序 / 删页 / 插页）…",
         "organize_title": "页面整理",
         "organize_hint": "不必先「分析预览」即可整理，页码就是整理后的页码（插入页与原有页完全等价）。缩略图一行多页，Ctrl + 滚轮可缩放缩略图，直接拖动即可移动页面（按住 Ctrl / Shift 可多选后一起拖）；插入页面会立即生效并关闭本窗口；几百页的书可用「移到第 N 页」一步跳转，或点「全屏」放大。删除所选把源页面移出输出（可用「恢复所选」放回末尾），删除插入页则是整个移除。未分析的页面在生成时会自动补算，顺序只影响生成的 PDF，不会改动源文件。",
@@ -307,7 +306,11 @@ STRINGS = {
         "forget_edits": "清除本书手工调整",
         "forget_edits_confirm": "清除本书保存的全部手工裁切和旋转？\n清除后需要重新点「分析预览」。",
         "edits_forgotten": "已清除本书保存的手工调整，请重新分析",
-        "edits_found": "找到上次保存的手工调整：{crops} 页裁切、{rotates} 页旋转，分析时会自动套用",
+        "edits_cleared_on_open": "已清除本书上次保存的分析结果与手工调整，本次从零开始",
+        "no_crop_ask": "还有 {n} 页没有分析。\n\n要自动分析裁边后生成，还是不裁边直接生成？\n不裁边直接生成：每页整页保留，只应用旋转和页面整理，不做自动裁切。",
+        "no_crop_analyze": "自动分析裁边后生成",
+        "no_crop_export": "不裁边直接生成",
+        "no_crop_export_log": "按「不裁边直接生成」导出：全书整页保留，仅应用旋转与页面整理",
         "reset_done": "{label}已恢复自动裁切",
         "resetting": "{label}正在重新自动裁切…",
         "ocr_page_running": "正在 OCR {label}…",
@@ -374,9 +377,8 @@ STRINGS = {
         "rotate_all_cw": "Rotate all 90° CW",
         "rotate_dir_ccw": "90° counterclockwise",
         "rotate_dir_cw": "90° clockwise",
-        "rotate_all_confirm": "Rotate all {n} pages {dir}?\n\nAnalyzed pages are re-cropped in the new orientation; hand-dragged crop boxes are not kept (they no longer fit after rotation). The uniform-margin setting and per-page angles accumulate.",
-        "rotate_all_done": "All pages rotated {dir}; re-analyzing…",
-        "rotate_all_done_no_plans": "All pages rotated {dir}. Click Analyze to check, or Export PDF directly.",
+        "rotate_all_confirm": "Rotate all {n} pages {dir}?\n\nAnalyzed pages return to the not-analyzed state (their crop boxes no longer fit). Click Analyze later if you want cropping, or Export PDF and choose Export without cropping. The uniform-margin setting and per-page angles accumulate.",
+        "rotate_all_done_no_plans": "All pages rotated {dir}. Click Analyze to check, or click Export PDF and choose Export without cropping.",
         "organize_btn": "Organize pages…",
         "organize_title": "Organize pages",
         "organize_hint": "No analysis needed first; page numbers are the arranged ones and inserted pages behave exactly like source pages. Ctrl + wheel zooms the thumbnails; drag pages straight to a new spot (Ctrl/Shift to drag a block); inserting a page applies immediately and closes this window; for long books use Move to page N or Full screen. Delete moves source pages out of the export (Restore puts them back at the end); deleting an inserted page removes it entirely. Unanalyzed pages are processed automatically at export time; the order only affects the exported PDF and source files are never touched.",
@@ -542,7 +544,11 @@ STRINGS = {
         "forget_edits": "Forget this book's manual edits",
         "forget_edits_confirm": "Forget all saved manual crops and rotations for this book?\nYou will need to click Analyze / preview again.",
         "edits_forgotten": "Forgot this book's saved manual edits; analyze again",
-        "edits_found": "Found saved manual edits: {crops} crops, {rotates} rotations; they are applied on analysis",
+        "edits_cleared_on_open": "Cleared this book's saved analysis and manual edits; starting fresh",
+        "no_crop_ask": "{n} pages are not analyzed yet.\n\nAnalyze and crop first, or export without cropping?\nExport without cropping: every page keeps its full size; only rotations and page arrangement are applied.",
+        "no_crop_analyze": "Analyze, crop, then export",
+        "no_crop_export": "Export without cropping",
+        "no_crop_export_log": "Exported without cropping: full pages kept; only rotations and arrangement applied",
         "reset_done": "{label} is back to the automatic crop",
         "resetting": "Re-running the automatic crop for {label}…",
         "ocr_page_running": "Running OCR on {label}…",
@@ -2591,13 +2597,22 @@ class PdfCropWindow(QMainWindow):
         self._uniform = None
         self._uniform_base = {}
         self._pending_requests = []
-        edits = crop.load_book_edits(src)
-        self._stored_crops = edits["crops"]
-        self._stored_rotates = edits["rotates"]
-        self._page_order = list(edits["order"]) or None
-        self._deleted = set(edits["deleted"])
-        self._imports = dict(edits["imports"])
-        self._import_counter = max([key - crop.IMPORT_PAGE_BASE for key in self._imports] + [0])
+        # Opening a book always starts fresh: analysis edits saved in an earlier
+        # session are cleared instead of restored (2026-11-19 requirement).
+        edits_file = crop.edits_path_for(src)
+        had_edits = edits_file.is_file()
+        self._stored_crops = {}
+        self._stored_rotates = {}
+        self._page_order = None
+        self._deleted = set()
+        self._imports = {}
+        self._import_counter = 0
+        if had_edits:
+            try:
+                edits_file.unlink(missing_ok=True)
+                self._wipe_imports_dir()
+            except OSError:
+                pass
         self.view.reset_view()
         try:
             self.pdf_pages = crop.page_count(src, src.parent)
@@ -2614,10 +2629,8 @@ class PdfCropWindow(QMainWindow):
             self.fs_page_info.setText(self.page_info.text())
         self.status.setText(self.t("opened", name=src.name, pages=self.pdf_pages))
         self.append_log(self.t("opened_log", src=src, pages=self.pdf_pages))
-        if self._stored_crops or self._stored_rotates:
-            self.append_log(
-                self.t("edits_found", crops=len(self._stored_crops), rotates=len(self._stored_rotates))
-            )
+        if had_edits:
+            self.append_log(self.t("edits_cleared_on_open"))
         self._rebuild_imports()
         self.page_list = self._ordered_keys()
         self._sync_page_spin_range()
@@ -3328,21 +3341,16 @@ class PdfCropWindow(QMainWindow):
                 self._stored_rotates[page] = angle
             else:
                 self._stored_rotates.pop(page, None)
-        had_source_plans = any(key < crop.IMPORT_PAGE_BASE for key in self.plans)
-        # Source plans are stale (wrong orientation); the re-analysis rebuilds them.
+        # Source plans are stale (wrong orientation); drop them instead of
+        # re-analyzing — Analyze or a no-crop export is the user's choice (2026-11-19).
         self.plans = {key: plan for key, plan in self.plans.items() if key >= crop.IMPORT_PAGE_BASE}
         self.page_list = self._ordered_keys()
         self._refresh_table()
-        try:
-            job = self._read_job(write_pdf=False) if had_source_plans else None
-        except Exception as exc:
-            QMessageBox.critical(self, self.t("app_title"), str(exc))
-            return
         imports = [(key, dict(entry)) for key, entry in sorted(self._imports.items())]
         kwargs = self._analyze_kwargs()
         self._set_busy(True)
         self.cancel.clear()
-        message = self.t("rotate_all_done", dir=direction)
+        message = self.t("rotate_all_done_no_plans", dir=direction)
         self.status.setText(message)
         self.append_log(message)
         src = self.src
@@ -3374,15 +3382,7 @@ class PdfCropWindow(QMainWindow):
                     updated.append((plan, entry))
                     self.events.put(("progress", self.t("ins_progress", i=len(updated), n=len(imports)), len(updated), len(imports)))
                 self.events.put(("rotate-all-imports", updated))
-                if job is not None:
-                    def progress(message: str, current: int, total: int) -> None:
-                        crop.check_cancelled(self.cancel)
-                        self.events.put(("progress", message, current, total))
-
-                    plans = crop.execute_job(job, progress=progress, cancel=self.cancel)
-                    self.events.put(("done", plans, job, False))
-                else:
-                    self.events.put(("rotate-all-finished", direction))
+                self.events.put(("rotate-all-finished", direction))
             except crop.CancelledError:
                 self.events.put(("cancelled",))
             except Exception:
@@ -4195,6 +4195,15 @@ class PdfCropWindow(QMainWindow):
             QMessageBox.information(self, self.t("app_title"), self.t("no_output_pages"))
             return
         missing = [key for key in output_keys if key not in self.plans]
+        no_crop = False
+        if missing and self._uniform is None and any(key < crop.IMPORT_PAGE_BASE for key in missing):
+            # Unanalyzed source pages would start a full analysis; offer the
+            # rotate-only export (2026-11-19: sometimes only rotation is wanted).
+            no_crop = self._ask_no_crop_export(len(missing))
+            if no_crop is None:
+                return
+            if no_crop:
+                self.append_log(self.t("no_crop_export_log"))
         if self.plans and not missing:
             # Every page in the arranged output already has a plan: write directly.
             try:
@@ -4219,9 +4228,31 @@ class PdfCropWindow(QMainWindow):
             except Exception as exc:
                 QMessageBox.critical(self, self.t("app_title"), str(exc))
                 return
+            self._no_crop_job(no_crop, job)
             self._start_merge_export(job)
             return
-        self._start_job(write_pdf=True, title=self.t("generate"))
+        self._start_job(write_pdf=True, title=self.t("generate"), no_crop=no_crop)
+
+    def _no_crop_job(self, no_crop: bool, job: crop.CropJob) -> None:
+        """Rotate-only export: skip content analysis, keep every page full size."""
+        if no_crop:
+            job.uniform_margins = self._uniform or (0.0, 0.0, 0.0, 0.0)
+
+    def _ask_no_crop_export(self, missing: int) -> bool | None:
+        """How to handle unanalyzed pages; True = no-crop export, None = cancelled."""
+        box = QMessageBox(self)
+        box.setWindowTitle(self.t("app_title"))
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setText(self.t("no_crop_ask", n=missing))
+        analyze = box.addButton(self.t("no_crop_analyze"), QMessageBox.ButtonRole.AcceptRole)
+        plain = box.addButton(self.t("no_crop_export"), QMessageBox.ButtonRole.ActionRole)
+        box.addButton(self.t("cancel"), QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is analyze:
+            return False
+        if box.clickedButton() is plain:
+            return True
+        return None
 
     def _start_write_only(self, job: crop.CropJob) -> None:
         if self.busy:
@@ -4268,7 +4299,7 @@ class PdfCropWindow(QMainWindow):
         self.worker = threading.Thread(target=work, daemon=True)
         self.worker.start()
 
-    def _start_job(self, write_pdf: bool, title: str) -> None:
+    def _start_job(self, write_pdf: bool, title: str, no_crop: bool = False) -> None:
         if self.busy:
             return
         try:
@@ -4276,6 +4307,7 @@ class PdfCropWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(self, self.t("app_title"), str(exc))
             return
+        self._no_crop_job(no_crop, job)
         if not job.src.is_file():
             QMessageBox.critical(self, self.t("app_title"), self.t("missing_src"))
             return
@@ -4718,11 +4750,123 @@ def run_self_test(report: Path) -> int:
             assert order_now == ["2", "3", "1"], order_now
             return f"list={window.page_list} thumbs={len(thumbs)} spin_max={window.page_spin.maximum()}"
 
+        def no_crop_fast_path() -> str:
+            # 2026-11-19: rotate-only export — zero uniform margins keep full pages.
+            out3 = base / "sample_只旋转.pdf"
+            job = crop.CropJob(
+                src=src, output=out3, work=base / "work3", reuse=False, jobs=2, render_dpi=150,
+                uniform_margins=(0.0, 0.0, 0.0, 0.0), page_rotates={1: 90.0},
+            )
+            plans = crop.execute_job(job)
+            plan = plans[0]
+            assert plan.crop == (0, 0, plan.width, plan.height), plan.crop
+            assert plan.rotate_deg == 90.0 and plan.width > plan.height, (
+                plan.rotate_deg, plan.width, plan.height,
+            )
+            with crop.fitz.open(out3) as doc:
+                rect = doc[0].rect
+            assert rect.width > rect.height, rect
+            return f"crop={plan.crop} page={rect.width:.0f}x{rect.height:.0f}"
+
+        def fresh_open_clears_edits() -> str:
+            # 2026-11-19: opening a book never restores saved edits; they are cleared.
+            crop.save_book_edits(src, {1: (10, 10, 100, 100)}, {1: 90.0}, [1], [], {})
+            assert crop.edits_path_for(src).is_file()
+            window = PdfCropWindow()
+            window.set_input(src)
+            assert window._stored_crops == {} and window._stored_rotates == {}, (
+                window._stored_crops, window._stored_rotates,
+            )
+            assert (
+                window._page_order is None and not window._deleted and not window._imports
+            ), (window._page_order, window._deleted, window._imports)
+            assert not crop.edits_path_for(src).exists()
+            return "cleared"
+
+        def rotate_all_without_reanalysis() -> str:
+            # 2026-11-19: rotate-all never re-analyzes; analyzed pages reset instead.
+            import time as _time
+
+            window = PdfCropWindow()
+            window.set_input(src)
+            plans = crop.execute_job(
+                crop.CropJob(
+                    src=src, output=base / "na.pdf", work=base / "work_na",
+                    write_pdf=False, jobs=2, render_dpi=150,
+                )
+            )
+            window.plans.update({plan.page: plan for plan in plans})
+            assert window.plans, "precondition: analyzed plans"
+            original = QMessageBox.question
+            QMessageBox.question = staticmethod(
+                lambda *args, **kwargs: QMessageBox.StandardButton.Yes
+            )
+            try:
+                window.rotate_all_pages(90.0)
+            finally:
+                QMessageBox.question = original
+            deadline = _time.time() + 30
+            while _time.time() < deadline and window.busy:
+                QApplication.processEvents()
+                _time.sleep(0.02)
+            QApplication.processEvents()
+            assert not window.busy, "rotate-all should finish without analysis"
+            assert not [key for key in window.plans if key < crop.IMPORT_PAGE_BASE], window.plans
+            assert abs(window._stored_rotates.get(1, 0.0) - 90.0) < 1e-6, window._stored_rotates
+            return f"rotates={window._stored_rotates} source_plans=none"
+
+        def rotated_page_extraction() -> str:
+            # 2026-11-19: pages with /Rotate must extract in their displayed orientation.
+            stored = Image.new("RGB", (400, 200), "white")
+            ImageDraw.Draw(stored).rectangle((0, 0, 60, 60), fill="black")
+            peg = base / "rot_src.jpg"
+            stored.save(peg, quality=95)
+            doc4 = crop.fitz.open()
+            pg = doc4.new_page(width=400, height=200)
+            pg.insert_image(crop.fitz.Rect(0, 0, 400, 200), filename=str(peg))
+            pg.set_rotation(90)
+            rotated = base / "rotated.pdf"
+            doc4.save(rotated)
+            doc4.close()
+            with crop.fitz.open(rotated) as v:
+                pix = v[0].get_pixmap(dpi=72)
+                shown = (pix.width, pix.height)
+            images = crop.extract_images(
+                rotated, base / "work_rot", base, reuse=False, expected_pages=1, render_dpi=150
+            )
+            with Image.open(images[0]) as got:
+                size = got.size
+            assert size == shown, (size, shown)
+            # A rotate-only export keeps the displayed orientation.
+            out4 = base / "rotated_out.pdf"
+            crop.execute_job(
+                crop.CropJob(
+                    src=rotated, output=out4, work=base / "work_rot2", reuse=False, jobs=2,
+                    render_dpi=150, uniform_margins=(0.0, 0.0, 0.0, 0.0),
+                )
+            )
+            with crop.fitz.open(out4) as doc5:
+                rect5 = doc5[0].rect
+            assert rect5.height > rect5.width, rect5
+            # v2 cache metadata (pre-/Rotate extraction) must be treated as stale.
+            import json as _json
+
+            meta = base / "work_rot" / crop.CACHE_METADATA
+            data = _json.loads(meta.read_text(encoding="utf-8"))
+            data["version"] = 2
+            meta.write_text(_json.dumps(data), encoding="utf-8")
+            assert not crop.cache_matches_source(base / "work_rot", rotated, 1, 150)
+            return f"shown={shown[0]}x{shown[1]} extracted={size[0]}x{size[1]} out={rect5.width:.0f}x{rect5.height:.0f}"
+
         step("sample PDF", make_sample)
         step("Qt window and preview", open_window)
         step("analyze, export, OCR", export)
         step("uniform margins fast path, rotation, imports", uniform_fast_path)
         step("organizer, thumbnails, filter and navigation without analysis", organize_without_analysis)
+        step("no-crop rotate-only fast path", no_crop_fast_path)
+        step("fresh open clears saved edits", fresh_open_clears_edits)
+        step("rotate-all without re-analysis", rotate_all_without_reanalysis)
+        step("/Rotate pages extract in displayed orientation", rotated_page_extraction)
     report.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return 0 if passed else 1
 

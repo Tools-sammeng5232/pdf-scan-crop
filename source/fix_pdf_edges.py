@@ -39,7 +39,7 @@ CACHE_FILE_RE = re.compile(
     r"^(?:page-\d+(?:_rot|_rgb|_ocr_preview)*\.(?:jpe?g|png|ppm|pbm|pgm|tiff?)"
     r"|_fix_edges_source\.json|_ocr_user_words\.txt)$"
 )
-CACHE_VERSION = 2
+CACHE_VERSION = 3
 DEFAULT_RENDER_DPI = 600
 DEFAULT_JOBS = 14
 APP_NAME = "PDF裁边"
@@ -426,10 +426,14 @@ def cache_matches_source(
     if not data:
         return False
     expected = source_metadata(src, page_total, render_dpi or DEFAULT_RENDER_DPI)
+    if int(data.get("version", 1)) != int(expected["version"]):
+        # v3: extracted page images now carry the PDF /Rotate display orientation,
+        # so every cache from an older build is stale and must be re-extracted.
+        return False
     for key in ("source", "size", "mtime_ns", "pages"):
         if data.get(key) != expected.get(key):
             return False
-    if int(data.get("version", 1)) >= 2 and render_dpi is not None:
+    if render_dpi is not None:
         cached_dpi = data.get("render_dpi")
         if cached_dpi is not None and int(cached_dpi) != int(render_dpi):
             return False
@@ -482,6 +486,24 @@ def _pixmap_to_jpeg(pix: object, dest: Path) -> None:
             current = None
 
 
+def _apply_page_rotation(page: object, dest: Path) -> bool:
+    """Rotate extracted pixels to the orientation PDF viewers display.
+
+    The embedded scan is stored unrotated; a page /Rotate value only affects
+    display. Without this the working image is sideways for phone-scanned
+    PDFs and every crop or user rotation is off by that angle (2026-11-19).
+    """
+    rotation = int(getattr(page, "rotation", 0) or 0) % 360
+    if rotation == 0:
+        return True
+    with Image.open(dest) as im:
+        rgb = im if im.mode == "RGB" else im.convert("RGB")
+        # PDF /Rotate is clockwise; PIL rotates counter-clockwise.
+        turned = rgb.rotate(-rotation, resample=Image.Resampling.BICUBIC, expand=True)
+    turned.save(dest, format="JPEG", quality=95, subsampling=0)
+    return True
+
+
 def _export_embedded_image(doc: object, page: object, dest: Path) -> bool:
     images = page.get_images(full=True)
     if not images:
@@ -500,16 +522,18 @@ def _export_embedded_image(doc: object, page: object, dest: Path) -> bool:
     info = doc.extract_image(xref)
     if info and info.get("image") and str(info.get("ext", "")).lower() in {"jpg", "jpeg"}:
         dest.write_bytes(info["image"])
-        return True
-    try:
-        pix = fitz.Pixmap(doc, xref)
+    else:
         try:
-            _pixmap_to_jpeg(pix, dest)
-        finally:
-            pix = None
-        return dest.is_file() and dest.stat().st_size > 0
-    except Exception:
-        return False
+            pix = fitz.Pixmap(doc, xref)
+            try:
+                _pixmap_to_jpeg(pix, dest)
+            finally:
+                pix = None
+            if not (dest.is_file() and dest.stat().st_size > 0):
+                return False
+        except Exception:
+            return False
+    return _apply_page_rotation(page, dest)
 
 
 def _render_page_jpeg(page: object, dest: Path, render_dpi: int) -> None:
